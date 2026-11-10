@@ -38,6 +38,8 @@ def pytest_collection_modifyitems(config, items):
     if _DB is None:
         _DB = _db_available()
     if not _DB:
+        if os.getenv("REQUIRE_TEST_DB") == "1":
+            raise pytest.UsageError("PostgreSQL недоступен. Проверьте DATABASE_URL.")
         skip = pytest.mark.skip(
             reason="PostgreSQL недоступен (DATABASE_URL); запустите docker compose up db"
         )
