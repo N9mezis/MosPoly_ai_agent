@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, downloadReport, json, login, logout, type components } from "./api/client";
+import { History } from "./History";
 import "./styles.css";
 
 type Schemas = components["schemas"];
@@ -220,6 +221,7 @@ export function App() {
     : user.error ? <ErrorMessage error={user.error} />
     : <Routes>
         <Route path="/" element={<NewAnalysis />} />
+        <Route path="/history" element={<History />} />
         <Route path="/analyses/:id" element={<AnalysisStatus />} />
         <Route path="/analyses/:id/report" element={<Report />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -227,6 +229,7 @@ export function App() {
   return <>
     <header><Link to="/">Проверка договоров</Link>
       {user.data && pathname !== "/login" && <div className="actions"><span>{user.data.full_name}</span>
+        <Link to="/history">История проверок</Link>
         <button className="secondary" disabled={leaving.isPending} onClick={() => leaving.mutate()}>Выйти</button></div>}
     </header>
     <main><ErrorMessage error={leaving.error} />
