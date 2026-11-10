@@ -2,17 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, downloadReport, json, login, logout, type components } from "./api/client";
+import { ErrorMessage } from "./ErrorMessage";
 import { History } from "./History";
+import { Regulations } from "./Regulations";
+import { Users } from "./Users";
 import "./styles.css";
 
 type Schemas = components["schemas"];
 type Finding = Schemas["FindingOut"];
 const terminal = ["completed", "failed", "cancelled"];
-
-function ErrorMessage({ error }: { error: Error | null }) {
-  if (error instanceof ApiError && error.status === 401) return <Navigate to="/login" replace />;
-  return error && <p role="alert" className="error">{error.message}</p>;
-}
 
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const navigate = useNavigate();
@@ -212,6 +210,8 @@ export function App() {
   const { pathname } = useLocation();
   const cache = useQueryClient();
   const user = useQuery({ queryKey: ["session"], queryFn: () => api<Schemas["MeOut"]>("/auth/me") });
+  const canManageUsers = user.data?.permissions?.includes("users:manage");
+  const canManageRegulations = user.data?.permissions?.includes("regulations:manage");
   const leaving = useMutation({
     mutationFn: logout,
     onSuccess: () => { cache.clear(); navigate("/login", { replace: true }); },
@@ -222,6 +222,8 @@ export function App() {
     : <Routes>
         <Route path="/" element={<NewAnalysis />} />
         <Route path="/history" element={<History />} />
+        {canManageUsers && user.data && <Route path="/users" element={<Users current={user.data} />} />}
+        {canManageRegulations && <Route path="/regulations" element={<Regulations />} />}
         <Route path="/analyses/:id" element={<AnalysisStatus />} />
         <Route path="/analyses/:id/report" element={<Report />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -230,6 +232,8 @@ export function App() {
     <header><Link to="/">Проверка договоров</Link>
       {user.data && pathname !== "/login" && <div className="actions"><span>{user.data.full_name}</span>
         <Link to="/history">История проверок</Link>
+        {canManageUsers && <Link to="/users">Пользователи</Link>}
+        {canManageRegulations && <Link to="/regulations">Нормативная база</Link>}
         <button className="secondary" disabled={leaving.isPending} onClick={() => leaving.mutate()}>Выйти</button></div>}
     </header>
     <main><ErrorMessage error={leaving.error} />
