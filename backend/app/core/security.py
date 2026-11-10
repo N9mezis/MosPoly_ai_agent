@@ -12,10 +12,13 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.tokens import active_users, decode_access
 
 from .config import get_settings
 from .db import get_session
@@ -35,15 +38,23 @@ class CurrentUser:
         return self.role in roles
 
 
-async def get_current_user(session: AsyncSession = Depends(get_session)) -> CurrentUser:
+async def get_current_user(
+    session: AsyncSession = Depends(get_session),
+    *,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CurrentUser:
     settings = get_settings()
-    if not settings.auth_dev_mode:
-        # TODO(агент B): разобрать Authorization: Bearer <JWT>, проверить подпись и срок,
-        # загрузить пользователя, проверить is_active.
-        raise UnauthorizedError("Требуется авторизация")
-    user = await session.scalar(select(User).where(User.email == settings.seed_admin_email.lower()))
-    if user is None:
-        raise UnauthorizedError("Dev-пользователь не найден: выполните `python -m app.cli seed`")
+    if settings.auth_dev_mode:
+        user = await session.scalar(select(User).where(User.email == settings.seed_admin_email.lower()))
+        if user is None:
+            raise UnauthorizedError("Dev-пользователь не найден: выполните `python -m app.cli seed`")
+    else:
+        scheme, _, token = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise UnauthorizedError("Требуется авторизация")
+        user = await session.scalar(active_users().where(User.id == decode_access(token)))
+        if user is None:
+            raise UnauthorizedError("Пользователь недоступен")
     return CurrentUser(
         id=user.id,
         organization_id=user.organization_id,
