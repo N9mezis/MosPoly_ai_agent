@@ -20,7 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Text, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import AppError
@@ -35,6 +35,7 @@ from app.domain.models import RegulationChunk as DomainChunk
 from app.domain.models import RetrievedRegulation
 from app.llm.embeddings import AsyncEmbedder
 
+from .bm25 import BM25Index, parse_tsvector
 from .rerank import NoReranker, Reranker
 
 RRF_K = 60
@@ -58,6 +59,12 @@ class RetrievalSettings:
     similarity_floor: float = 0.0
     channels: frozenset[str] = ALL_CHANNELS
     article_hints: dict[str, list[str]] = field(default_factory=dict)
+    # Не больше N частей одной статьи в выдаче: цель — подать модели разные нормы.
+    max_per_article: int = 2
+    # Веса каналов в RRF. Подсказки по статьям точны, но покрывают не всё.
+    channel_weights: dict[str, float] = field(
+        default_factory=lambda: {"dense": 1.0, "lexical": 1.0, "hints": 2.0}
+    )
 
 
 def build_tsquery(text: str, limit: int = 48) -> str:
@@ -82,11 +89,16 @@ def hinted_articles(text: str, hints: dict[str, list[str]]) -> list[str]:
     return list(dict.fromkeys(articles))
 
 
-def rrf_fuse(rankings: dict[str, list[str]], k: int = RRF_K) -> list[tuple[str, float]]:
+def rrf_fuse(
+    rankings: dict[str, list[str]],
+    k: int = RRF_K,
+    weights: dict[str, float] | None = None,
+) -> list[tuple[str, float]]:
     scores: dict[str, float] = {}
-    for ranked in rankings.values():
+    for name, ranked in rankings.items():
+        weight = (weights or {}).get(name, 1.0)
         for rank, item_id in enumerate(ranked, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
+            scores[item_id] = scores.get(item_id, 0.0) + weight / (k + rank)
     return sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
 
 
@@ -157,6 +169,7 @@ class HybridRetriever:
         self.settings = settings or RetrievalSettings()
         self._reranker = reranker or NoReranker()
         self._chunks: dict[str, DomainChunk] = {}
+        self._bm25: BM25Index | None = None
         self._by_article: dict[str, list[DomainChunk]] = {}
 
     @property
@@ -179,18 +192,27 @@ class HybridRetriever:
         for chunk in scope:
             if chunk.article:
                 self._by_article.setdefault(chunk.article, []).append(chunk)
+        # Леммы фрагментов для BM25 (тот же стеммер PostgreSQL, что и у полнотекстового индекса).
+        async with self._sessionmaker() as session:
+            rows = await session.execute(
+                select(RegulationChunk.id, cast(RegulationChunk.fts, Text)).where(
+                    RegulationChunk.id.in_([uuid.UUID(i) for i in self._chunks])
+                )
+            )
+            self._bm25 = BM25Index({str(cid): parse_tsvector(fts) for cid, fts in rows})
 
     # ArticleLookup — прямая выборка по статье (правила, проверка полноты).
     def find_by_article(self, article: str) -> list[DomainChunk]:
         return list(self._by_article.get(article, []))
 
-    async def _dense(self, session: AsyncSession, query: str) -> dict[str, float]:
-        vector = (await self._embedder.embed([query]))[0]
+    async def _dense(
+        self, session: AsyncSession, vector: list[float], ids: list[str] | None = None
+    ) -> dict[str, float]:
         distance = RegulationChunk.embedding.cosine_distance(vector)
         rows = await session.execute(
             select(RegulationChunk.id, distance)
             .where(
-                RegulationChunk.id.in_([uuid.UUID(i) for i in self._chunks]),
+                RegulationChunk.id.in_([uuid.UUID(i) for i in (ids or self._chunks)]),
                 RegulationChunk.embedding.is_not(None),
                 func.vector_dims(RegulationChunk.embedding) == len(vector),
             )
@@ -200,27 +222,33 @@ class HybridRetriever:
         return {str(chunk_id): 1.0 - float(dist) for chunk_id, dist in rows}
 
     async def _lexical(self, session: AsyncSession, query: str) -> dict[str, float]:
-        tsquery_text = build_tsquery(query)
-        if not tsquery_text:
+        """BM25 по леммам: запрос лемматизируется тем же to_tsvector('russian')."""
+        cleaned = PLACEHOLDER.sub(" ", query)
+        if not cleaned.strip() or self._bm25 is None:
             return {}
-        tsquery = func.to_tsquery("russian", tsquery_text)
-        rank = func.ts_rank_cd(RegulationChunk.fts, tsquery)
-        rows = await session.execute(
-            select(RegulationChunk.id, rank)
-            .where(
-                RegulationChunk.id.in_([uuid.UUID(i) for i in self._chunks]),
-                RegulationChunk.fts.op("@@")(tsquery),
-            )
-            .order_by(rank.desc())
-            .limit(CHANNEL_LIMIT)
-        )
-        return {str(chunk_id): float(score) for chunk_id, score in rows}
+        lexemes = await session.scalar(select(cast(func.to_tsvector("russian", cleaned), Text)))
+        terms = parse_tsvector(lexemes or "")
+        return self._bm25.search(list(terms), limit=CHANNEL_LIMIT)
 
-    def _hints(self, query: str) -> list[str]:
-        ids: list[str] = []
+    async def _hints(
+        self, session: AsyncSession, query: str, vector: list[float] | None
+    ) -> list[str]:
+        """Части подсказанных статей; внутри — по близости к пункту (если есть вектор).
+        Порядок: по одной лучшей части каждой статьи, затем остальные."""
+        per_article: list[list[str]] = []
         for article in hinted_articles(query, self.settings.article_hints):
-            ids.extend(chunk.db_id for chunk in self._by_article.get(article, []) if chunk.db_id)
-        return list(dict.fromkeys(ids))
+            ids = [chunk.db_id for chunk in self._by_article.get(article, []) if chunk.db_id]
+            if not ids:
+                continue
+            if vector is not None and len(ids) > 1:
+                scores = await self._dense(session, vector, ids)
+                ids.sort(key=lambda i: scores.get(i, -1.0), reverse=True)
+            per_article.append(ids)
+        ordered: list[str] = []
+        depth = max((len(ids) for ids in per_article), default=0)
+        for level in range(depth):
+            ordered.extend(ids[level] for ids in per_article if level < len(ids))
+        return list(dict.fromkeys(ordered))
 
     async def search(
         self,
@@ -237,19 +265,27 @@ class HybridRetriever:
 
         dense: dict[str, float] = {}
         lexical: dict[str, float] = {}
+        hints: list[str] = []
+        vector = None
+        if active & {"dense", "hints"}:
+            vector = (await self._embedder.embed([query]))[0]
         async with self._sessionmaker() as session:
             if "dense" in active:
-                dense = await self._dense(session, query)
+                dense = await self._dense(session, vector)
             if "lexical" in active:
                 lexical = await self._lexical(session, query)
-        hints = self._hints(query) if "hints" in active else []
+            if "hints" in active:
+                hints = await self._hints(session, query, vector)
 
         rankings = {
             "dense": list(dense),
             "lexical": list(lexical),
             "hints": hints,
         }
-        fused = rrf_fuse({name: ids for name, ids in rankings.items() if ids})
+        fused = rrf_fuse(
+            {name: ids for name, ids in rankings.items() if ids},
+            weights=self.settings.channel_weights,
+        )
         candidates = fused[: max(self.settings.candidates, limit)]
 
         floor = self.settings.similarity_floor
@@ -269,8 +305,21 @@ class HybridRetriever:
         if rerank_scores is not None:
             order.sort(key=lambda i: (rerank_scores[i], candidates[i][1]), reverse=True)
 
+        selected: list[int] = []
+        per_article: dict[str, int] = {}
+        cap = self.settings.max_per_article
+        for index in order:
+            article = self._chunks[candidates[index][0]].article
+            if cap and article and per_article.get(article, 0) >= cap:
+                continue
+            if article:
+                per_article[article] = per_article.get(article, 0) + 1
+            selected.append(index)
+            if len(selected) >= limit:
+                break
+
         results: list[RetrievedRegulation] = []
-        for position, index in enumerate(order[:limit], start=1):
+        for position, index in enumerate(selected, start=1):
             cid, fused_score = candidates[index]
             trace = {
                 "rank": position,

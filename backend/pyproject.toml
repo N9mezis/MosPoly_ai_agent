@@ -30,6 +30,8 @@ dependencies = [
   "pyjwt>=2.8",
   # отчёты PDF (агент B); системные библиотеки ставятся в Dockerfile
   "weasyprint>=62",
+  # импорт кодекса и разъяснений из PDF (app/knowledge/tk_parser.py)
+  "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
