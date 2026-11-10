@@ -39,4 +39,8 @@ blockquote { margin: .65rem 0; padding: .5rem .75rem; background: #f3f6fa; }
 .critical { --category: #a93131; --highlight: #ffdedc; }
 .recommended { --category: #8b5b00; --highlight: #ffeabf; }
 .info { --category: #255f9e; --highlight: #dcecff; }
+.history-filter { max-width: 18rem; margin-bottom: 1rem; }
+.table-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.history-table { width: 100%; border-collapse: collapse; text-align: left; }
+.history-table th, .history-table td { padding: .65rem; border-bottom: 1px solid #d6e0ea; vertical-align: top; }
 @media (max-width: 48rem) { .columns { grid-template-columns: 1fr; } }
