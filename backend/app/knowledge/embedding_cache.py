@@ -27,6 +27,9 @@ class CachedEmbedder:
         self._sessionmaker = sessionmaker
         self.model_name = inner.model_name
 
+    def query_text(self, text: str) -> str:
+        return getattr(self._inner, "query_text", lambda value: value)(text)
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []

@@ -41,12 +41,7 @@ async def build_retriever(sessionmaker, settings, *, with_reranker: bool = True)
             )
         )
     params = dict(profile.params) if profile else {}
-    retrieval_settings = RetrievalSettings(
-        candidates=int(params.get("candidates", settings.retrieval_candidates)),
-        top_k=int(params.get("top_k", settings.retrieval_top_k)),
-        similarity_floor=float(params.get("similarity_floor", 0.0)),
-        article_hints=dict(params.get("article_hints", {})),
-    )
+    retrieval_settings = RetrievalSettings.from_params(params, settings)
     retriever = HybridRetriever(
         sessionmaker,
         CachedEmbedder(build_embedder(settings), sessionmaker),

@@ -24,11 +24,21 @@ NO_VIOLATION_COMMENT_PATTERN = re.compile(
 
 MISSING_TERM_COMMENT_PATTERN = re.compile(
     r"(?:"
-    r"не\s+(?:указ\w*|упомин\w*|содерж\w*|предусмотр\w*)|"
+    r"не\s+(?:указ\w*|упомин\w*|содерж\w*|предусмотр\w*|уточн\w*|устанавлива\w*|"
+    r"определ\w*|конкретизир\w*|оговар\w*|гарантир\w*)|"
+    r"лишь\s+на|только\s+на|"
     r"отсутству\w*\s+(?:информац\w*|сведен\w*|услови\w*|указан\w*)"
     r")",
     re.IGNORECASE,
 )
+
+
+PLACEHOLDER_ONLY = re.compile(r"^[\s\W]*(?:\[[A-Z_]+\][\s\W]*)+$")
+
+
+def _only_placeholders(quote: str) -> bool:
+    """«[PERSON]», «[PERSON], [PASSPORT]» — метки обезличивания, а не текст договора."""
+    return bool(quote) and bool(PLACEHOLDER_ONLY.match(quote))
 
 
 def _normalized_contains(container: str, quote: str) -> bool:
@@ -71,6 +81,12 @@ def validate_chunk_result(
         notes.append("Цитата договора отсутствует в проверяемом чанке")
     if result.law_quote and not law_quote_valid:
         notes.append("Цитата нормы отсутствует в найденных нормативных фрагментах")
+
+    if status in {CheckStatus.VIOLATION, CheckStatus.WARNING} and _only_placeholders(
+        result.contract_quote
+    ):
+        status = CheckStatus.NOT_APPLICABLE
+        notes.append("Вывод скрыт: цитата договора состоит из меток обезличивания")
 
     if status == CheckStatus.WARNING and not allow_warning:
         status = CheckStatus.NOT_APPLICABLE

@@ -29,30 +29,31 @@ CONFIGS: list[tuple[str, frozenset[str], bool]] = [
 ]
 
 
-def _queries(settings) -> list[tuple[str, str, str]]:
+def _queries(settings) -> list[tuple[str, str, str, str]]:
     """(case, текст пункта, ожидаемая статья) для всех замечаний с конкретным пунктом."""
     dataset = load_dataset(settings.resolve_path(Path("evals/demo_cases.json")))
     contracts = settings.resolve_path(Path("data/contracts"))
-    items: list[tuple[str, str, str]] = []
+    items: list[tuple[str, str, str, str]] = []
     for case in dataset.cases:
         expected = [e for e in case.expected_findings if e.chunk_id != "document" and e.article]
         if not expected:
             continue
-        chunks = {
-            chunk.chunk_id: chunk
-            for chunk in chunk_document(anonymize_document(parse_document(contracts / case.path)))
-        }
+        document = anonymize_document(parse_document(contracts / case.path))
+        document_text = "\n".join(block.text for block in document.blocks)
+        chunks = {chunk.chunk_id: chunk for chunk in chunk_document(document)}
         for item in expected:
             chunk = chunks.get(item.chunk_id)
             if chunk is not None:
-                items.append((case.path, chunk.text, item.article))
+                items.append((case.path, chunk.text, item.article, document_text))
     return items
 
 
 async def run_retrieval_eval(*, with_rerank: bool) -> None:
     settings = get_settings()
     sessionmaker = get_sessionmaker()
-    retriever, _ = await build_retriever(sessionmaker, settings, with_reranker=with_rerank)
+    retriever, params = await build_retriever(sessionmaker, settings, with_reranker=with_rerank)
+    # Эти статьи подаются в проверку прямой выборкой по номеру (ТЗ, п. 5), поиск для них не нужен.
+    direct = set(params.get("required_articles", ["57", "100"]))
     queries = _queries(settings)
     if not queries:
         print("В разметке нет замечаний с конкретными пунктами.")
@@ -65,13 +66,20 @@ async def run_retrieval_eval(*, with_rerank: bool) -> None:
         f"Запросов: {len(queries)}; фрагментов нормативки: {retriever.size}; "
         f"эмбеддинги: {retriever._embedder.model_name}"
     )
-    print(f"{'конфигурация':<16} {'recall@1':>9} {'recall@3':>9} {'recall@5':>9} {'MRR':>7}")
+    searched = sum(1 for q in queries if q[2] not in direct)
+    print(f"Из них по статьям, которые ищутся поиском (не {', '.join(sorted(direct))}): {searched}")
+    print(
+        f"{'конфигурация':<16} {'recall@1':>9} {'recall@3':>9} {'recall@5':>9} {'MRR':>7}"
+        f" {'recall@3*':>10}"
+    )
     async with sessionmaker() as session:
         for name, channels, rerank in configs:
             hits = {1: 0, 3: 0, 5: 0}
+            searched_hits = 0
             reciprocal = 0.0
             misses: list[str] = []
-            for case, text, article in queries:
+            for case, text, article, document_text in queries:
+                retriever.set_document_context(document_text)
                 results = await retriever.search(
                     text, top_k=10, channels=channels, use_reranker=rerank
                 )
@@ -82,13 +90,17 @@ async def run_retrieval_eval(*, with_rerank: bool) -> None:
                     for k in hits:
                         if rank <= k:
                             hits[k] += 1
+                if rank and rank <= 3 and article not in direct:
+                    searched_hits += 1
                 if not rank or rank > 3:
                     misses.append(f"{Path(case).stem}: ст. {article} → {articles[:3]}")
             total = len(queries)
             metrics = {f"recall@{k}": hits[k] / total for k in hits} | {"mrr": reciprocal / total}
+            metrics["recall@3_searched"] = searched_hits / searched if searched else None
             print(
                 f"{name:<16} {metrics['recall@1']:>9.3f} {metrics['recall@3']:>9.3f} "
                 f"{metrics['recall@5']:>9.3f} {metrics['mrr']:>7.3f}"
+                f" {metrics['recall@3_searched'] or 0:>10.3f}"
             )
             session.add(
                 EvalRun(
@@ -107,5 +119,6 @@ async def run_retrieval_eval(*, with_rerank: bool) -> None:
             )
         await session.commit()
     print(
-        "Порог Ф-04: recall@3 ≥ 0.85. Промахи по каждой конфигурации — в eval_runs.metrics.misses."
+        "Порог Ф-04: recall@3 ≥ 0.85. recall@3* — без статей прямой выборки. "
+        "Промахи — в eval_runs.metrics.misses."
     )

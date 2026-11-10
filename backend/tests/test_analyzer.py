@@ -211,3 +211,11 @@ def test_semantic_required_terms_can_override_regex_candidates() -> None:
         )
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_llm_finding_on_quote_already_flagged_by_rule_is_hidden() -> None:
+    from app.analysis.analyzer import _norm, _overlaps
+
+    rule = _norm("Работнику устанавливается испытательный срок шесть месяцев.")
+    assert _overlaps(_norm("испытательный срок шесть месяцев"), [rule])
+    assert not _overlaps(_norm("Заработная плата выплачивается один раз в месяц"), [rule])

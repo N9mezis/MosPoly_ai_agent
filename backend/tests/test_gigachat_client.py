@@ -255,3 +255,23 @@ def test_gigachat_falls_back_when_json_schema_is_not_supported() -> None:
 
     assert result == []
     assert calls == {"auth": 1, "chat": 2}
+
+
+def test_gigachat_retries_without_schema_when_answer_is_empty() -> None:
+    payloads: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v2/oauth":
+            return httpx.Response(200, json={"access_token": "token"})
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        if "response_format" in payload:
+            return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"findings": []}'}}]})
+
+    client = GigaChatLLMClient(credentials="key", transport=httpx.MockTransport(handler))
+    chunk = ContractChunk(chunk_id="document", text="Трудовой договор")
+    result = asyncio.run(client.check_required_terms([chunk], []))
+    assert result == []
+    assert "response_format" in payloads[0]
+    assert "response_format" not in payloads[1]

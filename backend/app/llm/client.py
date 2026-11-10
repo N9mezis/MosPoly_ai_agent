@@ -22,6 +22,9 @@ from app.llm.gigachat import (
 
 SYSTEM_PROMPT = """Ты проверяешь отдельный пункт стандартного трудового договора РФ.
 Используй только переданные нормативные фрагменты. Не применяй знания, которых нет в контексте.
+Персональные данные в тексте обезличены: метки [PERSON], [PASSPORT], [SNILS], [INN], [PHONE],
+[EMAIL], [ADDRESS] заменяют реальные сведения, которые в договоре присутствуют. Не считай
+метку отсутствием сведений и не делай по ней замечаний.
 
 Добавляй finding только при прямом и однозначном противоречии между фразой договора
 и переданной нормой. Статус finding всегда violation. Обязательны точная дословная
@@ -48,7 +51,11 @@ violation_found, если findings не пуст, иначе no_violation. Ка�
 Корректно экранируй кавычки и переводы строк внутри строковых значений."""
 
 REQUIRED_TERMS_SYSTEM_PROMPT = """Ты проверяешь полноту трудового договора РФ целиком.
-Используй только переданный текст договора и нормативные фрагменты. Проверь четыре условия:
+Используй только переданный текст договора и нормативные фрагменты.
+Персональные данные в тексте обезличены: метки [PERSON], [PASSPORT], [SNILS], [INN], [PHONE],
+[EMAIL], [ADDRESS] заменяют реальные сведения, которые в договоре присутствуют. Не считай
+метку отсутствием сведений и не делай по ней замечаний.
+Проверь четыре условия:
 место работы, трудовую функцию, конкретный размер оклада и режим рабочего времени.
 Верни замечание только если условие отсутствует или сформулировано неоднозначно.
 Не требуй повторения условия в каждом пункте. Для найденной проблемы укажи ID наиболее
@@ -473,7 +480,51 @@ class GigaChatLLMClient:
             used_json_schema=used_schema,
         )
         try:
-            return str(data["choices"][0]["message"]["content"])
+            content = str(data["choices"][0]["message"]["content"] or "")
+        except (KeyError, IndexError, TypeError) as error:
+            raise LLMResponseFormatError("GigaChat вернул ответ без текста результата") from error
+        if not content.strip() and used_schema:
+            # На длинном контексте GigaChat в режиме json_schema иногда отдаёт пустой ответ
+            # (finish_reason=stop). Повторяем этот запрос без схемы: формат держит промпт,
+            # а разбор и валидацию делает _parse_results.
+            fallback = dict(request_payload)
+            fallback.pop("response_format", None)
+            return await self._chat_content_plain(fallback, purpose)
+        return content
+
+    async def _chat_content_plain(self, payload: dict, purpose: str) -> str:
+        started = time.monotonic()
+        response = await self._post_chat(payload, purpose)
+        latency = int((time.monotonic() - started) * 1000)
+        if response.status_code >= 400:
+            record_call(
+                purpose,
+                self.provider,
+                self.model_name,
+                2,
+                latency,
+                response.status_code,
+                "error",
+                f"HTTP {response.status_code}",
+            )
+            raise GigaChatError(
+                f"GigaChat вернул HTTP {response.status_code}", status_code=response.status_code
+            )
+        data = response.json()
+        usage = data.get("usage") or {}
+        record_call(
+            purpose,
+            self.provider,
+            self.model_name,
+            2,
+            latency,
+            response.status_code,
+            "ok_without_schema",
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+        try:
+            return str(data["choices"][0]["message"]["content"] or "")
         except (KeyError, IndexError, TypeError) as error:
             raise LLMResponseFormatError("GigaChat вернул ответ без текста результата") from error
 

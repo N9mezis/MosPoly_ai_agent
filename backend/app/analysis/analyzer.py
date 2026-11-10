@@ -85,6 +85,9 @@ class ContractAnalyzer:
         document = anonymize_document(document)
         chunks = chunk_document(document)
         document_text = "\n".join(block.text for block in document.blocks)
+        set_context = getattr(self._knowledge_base, "set_document_context", None)
+        if set_context is not None:
+            set_context(document_text)
         technical: list[ChunkCheckResult] = []
         required_term_results = await self._check_document_requirements(
             chunks, document_text, technical
@@ -165,9 +168,23 @@ class ContractAnalyzer:
 
         try:
             llm_results = await self._llm_client.check_chunk(chunk, regulations)
+            rule_quotes = [
+                _norm(item.contract_quote)
+                for item in rule_evaluation.findings
+                if item.contract_quote
+            ]
             for llm_result in llm_results:
                 checked = validate_chunk_result(llm_result, chunk, regulations)
                 checked.origin = "llm_chunk"
+                if checked.status in (CheckStatus.VIOLATION, CheckStatus.WARNING) and _overlaps(
+                    _norm(checked.contract_quote), rule_quotes
+                ):
+                    # Ту же фразу уже квалифицировало детерминированное правило: модель,
+                    # не видя «занятой» статьи, склонна подбирать неприменимую соседнюю норму.
+                    checked.status = CheckStatus.NOT_APPLICABLE
+                    checked.validation_notes.append(
+                        "Скрыто: эту формулировку уже квалифицировало правило"
+                    )
                 results.append(checked)
         except LLMResponseFormatError as error:
             results.append(
@@ -294,3 +311,14 @@ def dedup_key(result: ChunkCheckResult) -> tuple[str, str, str, str]:
         " ".join(result.contract_quote.lower().split()),
         " ".join(result.law_quote.lower().split()),
     )
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.lower().replace("ё", "е").split()).strip(" .;:")
+
+
+def _overlaps(quote: str, others: list[str]) -> bool:
+    """Цитаты пересекаются, если одна содержит другую (или совпадают)."""
+    if len(quote) < 8:
+        return False
+    return any(other and (quote in other or other in quote) for other in others)
