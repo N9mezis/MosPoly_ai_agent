@@ -1,0 +1,125 @@
+{
+  "cases": [
+    {
+      "path": "correct/correct_01_accountant.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_02_business_analyst.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_03_office_manager.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_04_hr_specialist.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_05_legal_assistant.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "problematic/problematic_01_multiple_violations.docx",
+      "expected_findings": [
+        {"chunk_id": "3.2", "article": "136", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.1", "article": "91", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.3", "article": "115", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "5.1", "article": "70", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_02_vague_salary_and_long_week.docx",
+      "expected_findings": [
+        {"chunk_id": "3.1", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "3.2", "article": "136", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.1", "article": "91", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.3", "article": "115", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_03_probation_leave_and_bank.docx",
+      "expected_findings": [
+        {"chunk_id": "3.2", "article": "136", "acceptable_statuses": ["warning", "violation"]},
+        {"chunk_id": "4.1", "article": "91", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.3", "article": "115", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "5.1", "article": "70", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_04_employer_discretion.docx",
+      "expected_findings": [
+        {"chunk_id": "3.1", "article": "57", "acceptable_statuses": ["warning", "violation"]},
+        {"chunk_id": "3.2", "article": "136", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.1", "article": "91", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.3", "article": "115", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "5.1", "article": "70", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_05_missing_terms.docx",
+      "expected_findings": [
+        {"chunk_id": "1.2", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "1.3", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "3.1", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "3.2", "article": "136", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.1", "article": "91", "acceptable_statuses": ["violation"]},
+        {"chunk_id": "4.2", "article": "100", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "4.3", "article": "115", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "correct/correct_06_procurement_specialist.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_07_content_editor.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_08_quality_analyst.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_09_client_service.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "correct/correct_10_logistics_coordinator.docx",
+      "expected_findings": []
+    },
+    {
+      "path": "problematic/problematic_06_flexible_workplace.docx",
+      "expected_findings": [
+        {"chunk_id": "1.3", "article": "57", "acceptable_statuses": ["warning"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_07_compound_schedule.docx",
+      "expected_findings": [
+        {"chunk_id": "3.1", "article": "91", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_08_single_settlement.docx",
+      "expected_findings": [
+        {"chunk_id": "2.2", "article": "136", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_09_salary_grade_probation.docx",
+      "expected_findings": [
+        {"chunk_id": "2.1", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "4.1", "article": "70", "acceptable_statuses": ["violation"]}
+      ]
+    },
+    {
+      "path": "problematic/problematic_10_variable_duties.docx",
+      "expected_findings": [
+        {"chunk_id": "1.2", "article": "57", "acceptable_statuses": ["warning"]},
+        {"chunk_id": "1.3", "article": "57", "acceptable_statuses": ["warning"]}
+      ]
+    }
+  ]
+}

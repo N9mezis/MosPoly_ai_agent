@@ -1,0 +1,29 @@
+# Режим разработки: hot-reload бэкенда, Vite dev server для фронта.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+services:
+  api:
+    command: ["sh", "/repo/backend/docker/start-api.sh", "--reload"]
+    volumes:
+      - ./backend:/repo/backend
+      - ./data:/repo/data
+      - ./evals:/repo/evals
+    environment:
+      APP_ENV: development
+
+  worker:
+    command: ["arq", "app.analysis.worker.WorkerSettings", "--watch", "/repo/backend/app"]
+    volumes:
+      - ./backend:/repo/backend
+      - ./data:/repo/data
+      - ./evals:/repo/evals
+
+  web:
+    build:
+      context: frontend
+      target: dev
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "80"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_PROXY: http://api:8000
