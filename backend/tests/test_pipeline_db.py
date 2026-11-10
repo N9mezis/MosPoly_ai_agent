@@ -32,7 +32,7 @@ PROBLEMATIC = (
     REPO_ROOT / "data" / "contracts" / "problematic" / "problematic_01_multiple_violations.docx"
 )
 CORRECT = REPO_ROOT / "data" / "contracts" / "correct" / "correct_01_accountant.docx"
-KB_FILE = REPO_ROOT / "data" / "regulations" / "tk_rf_core_2026-05-15.json"
+KB_FILE = REPO_ROOT / "data" / "regulations" / "legacy" / "tk_rf_core_2026-05-15.json"
 
 
 def _sessionmaker():
