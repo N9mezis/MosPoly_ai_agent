@@ -1,0 +1,3 @@
+# Служебные команды: .\scripts\cli.ps1 seed | check-gigachat | import-kb | evaluate ...
+Set-Location (Join-Path $PSScriptRoot "..")
+docker compose run --rm api python -m app.cli @args

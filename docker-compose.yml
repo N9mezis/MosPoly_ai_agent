@@ -1,0 +1,83 @@
+name: tk-checker
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: tk-checker-backend:dev
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tk}:${POSTGRES_PASSWORD:-tk}@db:5432/${POSTGRES_DB:-tk}
+    REDIS_URL: redis://redis:6379/0
+    REPO_ROOT: /repo
+    GIGACHAT_CA_BUNDLE_FILE: /repo/certs/russian_trusted_root_ca_pem.crt
+    # Общий для api и worker каталог временных загрузок; файлы удаляются после обработки.
+    UPLOAD_TMP_DIR: /data/uploads
+  volumes:
+    - uploads:/data/uploads
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tk}
+      POSTGRES_DB: ${POSTGRES_DB:-tk}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: ["sh", "/repo/backend/docker/start-api.sh"]
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    <<: *backend
+    command: ["arq", "app.analysis.worker.WorkerSettings"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: frontend
+    image: tk-checker-web:dev
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

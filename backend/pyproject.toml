@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tk-checker"
+version = "0.1.0"
+description = "ИИ-агент проверки трудовых договоров на соответствие ТК РФ"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.3",
+  "sqlalchemy[asyncio]>=2.0.30",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "pgvector>=0.3",
+  "arq>=0.26",
+  "redis>=5.0",
+  "httpx>=0.27",
+  "python-docx>=1.1",
+  "pypdf>=4.2",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "pyyaml>=6.0",
+  # auth (агент B)
+  "argon2-cffi>=23.1",
+  "pyjwt>=2.8",
+  # отчёты PDF (агент B); системные библиотеки ставятся в Dockerfile
+  "weasyprint>=62",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "db: тесты, которым нужен PostgreSQL (DATABASE_URL)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008", "E501", "UP042"]
