@@ -36,7 +36,10 @@ class RegulationChunk(BaseModel):
     source_id: str
     source_title: str
     article: str | None = None
+    part: str | None = None
+    title: str = ""
     text: str
+    db_id: str | None = None
     source_url: str | None = None
     edition_date: str | None = None
     effective_from: str | None = None
@@ -52,6 +55,8 @@ class RegulationChunk(BaseModel):
 class RetrievedRegulation(BaseModel):
     regulation: RegulationChunk
     similarity_score: float
+    # Диагностика поиска: ранги и скоры каналов (dense/lexical/hints), rrf, rerank.
+    trace: dict = Field(default_factory=dict)
 
 
 class LLMChunkResult(BaseModel):
@@ -61,8 +66,9 @@ class LLMChunkResult(BaseModel):
     contract_quote: str = ""
     law_quote: str = ""
     comment: str = ""
+    recommendation: str = ""
 
-    @field_validator("source", "contract_quote", "law_quote", "comment")
+    @field_validator("source", "contract_quote", "law_quote", "comment", "recommendation")
     @classmethod
     def normalize_text(cls, value: str) -> str:
         return " ".join(value.split())
@@ -71,6 +77,11 @@ class LLMChunkResult(BaseModel):
 class ChunkCheckResult(LLMChunkResult):
     retrieval_score: float | None = None
     validation_notes: list[str] = Field(default_factory=list)
+    # Происхождение: rule | rule_required | llm_chunk | llm_document
+    origin: str = "llm_chunk"
+    rule_id: str | None = None
+    # Нормативный фрагмент, которым подтверждена цитата нормы (chunk_id RegulationChunk).
+    regulation_chunk_id: str | None = None
 
 
 class AnalysisReport(BaseModel):
@@ -80,3 +91,8 @@ class AnalysisReport(BaseModel):
     chunks_total: int = 0
     results: list[ChunkCheckResult] = Field(default_factory=list)
     markdown: str = ""
+    # Для сохранения в БД (заполняется конвейером): обезличенные блоки и пункты,
+    # а также поисковая выдача по каждому пункту.
+    blocks: list[TextBlock] = Field(default_factory=list)
+    chunks: list[ContractChunk] = Field(default_factory=list)
+    retrievals: dict[str, list[RetrievedRegulation]] = Field(default_factory=dict)

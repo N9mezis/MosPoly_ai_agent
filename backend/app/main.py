@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
 
+from app.analysis.queue import close_queue
 from app.api.v1 import analyses, auth, document_types, documents, regulations, reports
 from app.api.v1.schemas import HealthOut, ReadyOut
 from app.core.config import get_settings
@@ -16,7 +20,16 @@ from app.core.logging import setup_logging
 settings = get_settings()
 setup_logging(settings.log_level)
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    await close_queue()
+    await get_engine().dispose()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Проверка трудовых договоров по ТК РФ",
     version="0.1.0",
     description=(

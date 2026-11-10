@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
-import ssl
 import time
-import uuid
 from pathlib import Path
 from typing import Protocol
 
@@ -13,6 +10,15 @@ import httpx
 from pydantic import ValidationError
 
 from app.domain.models import CheckStatus, ContractChunk, LLMChunkResult, RetrievedRegulation
+from app.llm.calllog import record_call
+from app.llm.gigachat import (
+    DEFAULT_AUTH_URL,
+    DEFAULT_BASE_URL,
+    GigaChatAuth,
+    GigaChatError,
+    GigaChatHTTP,
+    build_ssl_context,
+)
 
 SYSTEM_PROMPT = """Ты проверяешь отдельный пункт стандартного трудового договора РФ.
 Используй только переданные нормативные фрагменты. Не применяй знания, которых нет в контексте.
@@ -30,7 +36,8 @@ SYSTEM_PROMPT = """Ты проверяешь отдельный пункт ст�
 обязательным условием трудового договора.
 
 Один пункт может содержать несколько независимых проблем. Верни только компактный JSON:
-{"decision":"violation_found|no_violation","chunk_id":"ID","findings":[{"status":"...","source":"...","contract_quote":"...","law_quote":"...","comment":"..."}]}
+{"decision":"violation_found|no_violation","chunk_id":"ID","findings":[{"status":"...","source":"...","contract_quote":"...","law_quote":"...","comment":"...","recommendation":"..."}]}
+В recommendation кратко предложи законную формулировку пункта (одно-два предложения).
 Если замечаний нет, верни пустой массив findings. Не добавляй другие поля и Markdown."""
 
 JSON_REPAIR_PROMPT = """Предыдущий ответ не удалось разобрать.
@@ -48,7 +55,8 @@ REQUIRED_TERMS_SYSTEM_PROMPT = """Ты проверяешь полноту тр�
 подходящего пункта и точную цитату. Если условие полностью отсутствует, используй
 chunk_id "document" и пустую contract_quote. Статус замечания — warning.
 Верни только JSON {"findings":[{"chunk_id":"...","status":"warning","source":"...",
-"contract_quote":"...","law_quote":"...","comment":"..."}]}. Если проблем нет,
+"contract_quote":"...","law_quote":"...","comment":"...","recommendation":"..."}]}. В recommendation
+предложи, какую формулировку добавить в договор. Если проблем нет,
 верни пустой массив findings."""
 
 REQUIRED_TERMS_REPAIR_PROMPT = """Предыдущий ответ не удалось разобрать.
@@ -62,6 +70,7 @@ FINDING_PROPERTIES = {
     "contract_quote": {"type": "string"},
     "law_quote": {"type": "string"},
     "comment": {"type": "string"},
+    "recommendation": {"type": "string"},
 }
 
 CHUNK_RESPONSE_FORMAT = {
@@ -382,161 +391,114 @@ class OpenAICompatibleLLMClient:
 
 
 class GigaChatLLMClient:
-    """Direct GigaChat REST client with cached OAuth access tokens."""
-
-    TOKEN_TTL_SECONDS = 29 * 60
+    """Клиент GigaChat Chat Completions поверх `GigaChatHTTP` (свой ключ и кеш токена)."""
 
     def __init__(
         self,
-        credentials: str,
+        credentials: str = "",
         scope: str = "GIGACHAT_API_PERS",
         model: str = "GigaChat-2",
-        base_url: str = "https://api.giga.chat/v1",
-        auth_url: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+        base_url: str = DEFAULT_BASE_URL,
+        auth_url: str = DEFAULT_AUTH_URL,
         timeout_seconds: float = 60.0,
         temperature: float = 0.01,
         max_output_tokens: int = 900,
         verify_ssl: bool = True,
         ca_bundle_file: Path | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        http: GigaChatHTTP | None = None,
     ) -> None:
-        if not credentials:
-            raise ValueError("Для GigaChat нужен GIGACHAT_CREDENTIALS")
-        self._credentials = credentials
-        self._scope = scope
-        self._model = model
-        self._base_url = base_url.rstrip("/")
-        self._chat_url = f"{self._base_url}/chat/completions"
-        self._models_url = f"{self._base_url}/models"
-        self._auth_url = auth_url
-        self._timeout = timeout_seconds
+        if http is None:
+            if not credentials:
+                raise ValueError("Для GigaChat нужен GIGACHAT_LLM_CREDENTIALS")
+            http = GigaChatHTTP(
+                GigaChatAuth(credentials, scope=scope, auth_url=auth_url),
+                base_url=base_url,
+                timeout_seconds=timeout_seconds,
+                verify=build_ssl_context(verify_ssl, ca_bundle_file),
+                transport=transport,
+            )
+        self._http = http
+        self.model_name = model
+        self.provider = "gigachat"
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
-        self._transport = transport
-        self._verify = self._build_ssl_context(verify_ssl, ca_bundle_file)
-        self._access_token: str | None = None
-        self._token_valid_until = 0.0
-        self._token_lock = asyncio.Lock()
         self._supports_json_schema: bool | None = None
 
-    @staticmethod
-    def _build_ssl_context(
-        verify_ssl: bool,
-        ca_bundle_file: Path | None,
-    ) -> bool | ssl.SSLContext:
-        if not verify_ssl:
-            return False
-        if ca_bundle_file:
-            return ssl.create_default_context(cafile=str(ca_bundle_file))
-        return True
-
-    @property
-    def _authorization_header(self) -> str:
-        value = self._credentials.strip()
-        if value.lower().startswith("basic "):
-            return value
-        return f"Basic {value}"
-
-    def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            timeout=self._timeout,
-            verify=self._verify,
-            transport=self._transport,
+    async def _post_chat(self, payload: dict, purpose: str) -> httpx.Response:
+        return await self._http.request(
+            "POST", "chat/completions", json=payload, purpose=purpose, model=self.model_name
         )
 
-    async def _request_access_token(self) -> str:
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "RqUID": str(uuid.uuid4()),
-            "Authorization": self._authorization_header,
-        }
-        async with self._client() as client:
-            response = await client.post(
-                self._auth_url,
-                headers=headers,
-                data={"scope": self._scope},
-            )
-            response.raise_for_status()
-            data = response.json()
-        token = str(data.get("access_token", ""))
-        if not token:
-            raise ValueError("GigaChat не вернул access_token")
-        self._access_token = token
-        self._token_valid_until = time.monotonic() + self.TOKEN_TTL_SECONDS
-        return token
-
-    async def _get_access_token(self, force_refresh: bool = False) -> str:
-        if not force_refresh and self._access_token and time.monotonic() < self._token_valid_until:
-            return self._access_token
-        async with self._token_lock:
-            if (
-                not force_refresh
-                and self._access_token
-                and time.monotonic() < self._token_valid_until
-            ):
-                return self._access_token
-            return await self._request_access_token()
-
-    async def _send_chat(self, payload: dict, force_refresh: bool = False) -> httpx.Response:
-        token = await self._get_access_token(force_refresh=force_refresh)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        }
-        async with self._client() as client:
-            return await client.post(self._chat_url, headers=headers, json=payload)
-
-    async def _chat_content(self, payload: dict) -> str:
+    async def _chat_content(self, payload: dict, purpose: str) -> str:
         request_payload = dict(payload)
         if self._supports_json_schema is False:
             request_payload.pop("response_format", None)
-        response = await self._send_chat(request_payload)
-        if response.status_code == 401:
-            self._access_token = None
-            self._token_valid_until = 0.0
-            response = await self._send_chat(request_payload, force_refresh=True)
+        started = time.monotonic()
+        response = await self._post_chat(request_payload, purpose)
         if response.status_code in {400, 422} and "response_format" in request_payload:
             self._supports_json_schema = False
             request_payload.pop("response_format", None)
-            response = await self._send_chat(request_payload)
-        response.raise_for_status()
-        if "response_format" in request_payload:
+            response = await self._post_chat(request_payload, purpose)
+        latency = int((time.monotonic() - started) * 1000)
+        if response.status_code >= 400:
+            record_call(
+                purpose,
+                self.provider,
+                self.model_name,
+                1,
+                latency,
+                response.status_code,
+                "error",
+                f"HTTP {response.status_code}",
+            )
+            raise GigaChatError(
+                f"GigaChat вернул HTTP {response.status_code}", status_code=response.status_code
+            )
+        used_schema = "response_format" in request_payload
+        if used_schema:
             self._supports_json_schema = True
         data = response.json()
+        usage = data.get("usage") or {}
+        record_call(
+            purpose,
+            self.provider,
+            self.model_name,
+            1,
+            latency,
+            response.status_code,
+            "ok",
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            used_json_schema=used_schema,
+        )
         try:
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as error:
             raise LLMResponseFormatError("GigaChat вернул ответ без текста результата") from error
 
-    async def check_connection(self) -> list[str]:
-        token = await self._get_access_token()
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
+    async def complete_json(
+        self,
+        messages: list[dict[str, str]],
+        response_format: dict | None,
+        *,
+        purpose: str,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Общий вызов для вспомогательных задач (например, реранкера)."""
+        payload: dict = {
+            "model": self.model_name,
+            "temperature": self._temperature,
+            "max_tokens": max_tokens or self._max_output_tokens,
+            "stream": False,
+            "messages": messages,
         }
-        async with self._client() as client:
-            response = await client.get(self._models_url, headers=headers)
-        if response.status_code == 401:
-            self._access_token = None
-            self._token_valid_until = 0.0
-            token = await self._get_access_token(force_refresh=True)
-            headers["Authorization"] = f"Bearer {token}"
-            async with self._client() as client:
-                response = await client.get(self._models_url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        raw_models = data.get("data", data.get("models", []))
-        models: list[str] = []
-        for item in raw_models:
-            if isinstance(item, str):
-                models.append(item)
-            elif isinstance(item, dict):
-                model_id = item.get("id") or item.get("name")
-                if model_id:
-                    models.append(str(model_id))
-        return models
+        if response_format:
+            payload["response_format"] = response_format
+        return await self._chat_content(payload, purpose)
+
+    async def check_connection(self) -> list[str]:
+        return await self._http.list_models()
 
     async def check_chunk(
         self,
@@ -548,26 +510,26 @@ class GigaChatLLMClient:
             {"role": "user", "content": _build_user_prompt(chunk, regulations)},
         ]
         payload = {
-            "model": self._model,
+            "model": self.model_name,
             "temperature": self._temperature,
             "max_tokens": self._max_output_tokens,
             "stream": False,
             "response_format": CHUNK_RESPONSE_FORMAT,
             "messages": messages,
         }
-        content = await self._chat_content(payload)
+        content = await self._chat_content(payload, "chunk_check")
         try:
             return _parse_results(content, chunk.chunk_id, use_decision=True)
         except LLMResponseFormatError:
+            record_call("chunk_check", self.provider, self.model_name, 1, None, 200, "schema_error")
             payload["messages"] = _repair_messages(messages, content)
-            repaired_content = await self._chat_content(payload)
+            repaired_content = await self._chat_content(payload, "chunk_check")
             try:
-                return _parse_results(
-                    repaired_content,
-                    chunk.chunk_id,
-                    use_decision=True,
-                )
+                return _parse_results(repaired_content, chunk.chunk_id, use_decision=True)
             except LLMResponseFormatError as error:
+                record_call(
+                    "chunk_check", self.provider, self.model_name, 2, None, 200, "schema_error"
+                )
                 raise LLMResponseFormatError(
                     "GigaChat дважды вернул ответ в некорректном JSON-формате"
                 ) from error
@@ -579,79 +541,28 @@ class GigaChatLLMClient:
     ) -> list[LLMChunkResult] | None:
         messages = [
             {"role": "system", "content": REQUIRED_TERMS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": _build_required_terms_prompt(chunks, regulations),
-            },
+            {"role": "user", "content": _build_required_terms_prompt(chunks, regulations)},
         ]
         payload = {
-            "model": self._model,
+            "model": self.model_name,
             "temperature": self._temperature,
             "max_tokens": self._max_output_tokens,
             "stream": False,
             "response_format": REQUIRED_TERMS_RESPONSE_FORMAT,
             "messages": messages,
         }
-        content = await self._chat_content(payload)
+        content = await self._chat_content(payload, "required_terms")
         try:
             return _parse_results(content, "document", preserve_chunk_ids=True)
         except LLMResponseFormatError:
-            payload["messages"] = _repair_messages(
-                messages,
-                content,
-                REQUIRED_TERMS_REPAIR_PROMPT,
+            record_call(
+                "required_terms", self.provider, self.model_name, 1, None, 200, "schema_error"
             )
-            repaired_content = await self._chat_content(payload)
+            payload["messages"] = _repair_messages(messages, content, REQUIRED_TERMS_REPAIR_PROMPT)
+            repaired_content = await self._chat_content(payload, "required_terms")
             try:
-                return _parse_results(
-                    repaired_content,
-                    "document",
-                    preserve_chunk_ids=True,
-                )
+                return _parse_results(repaired_content, "document", preserve_chunk_ids=True)
             except LLMResponseFormatError as error:
                 raise LLMResponseFormatError(
                     "GigaChat дважды вернул проверку полноты в некорректном формате"
                 ) from error
-
-
-def create_llm_client(
-    provider: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    timeout_seconds: float,
-    temperature: float,
-    max_output_tokens: int = 900,
-    gigachat_credentials: str = "",
-    gigachat_scope: str = "GIGACHAT_API_PERS",
-    gigachat_model: str = "GigaChat-2",
-    gigachat_base_url: str = "https://api.giga.chat/v1",
-    gigachat_auth_url: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
-    gigachat_verify_ssl: bool = True,
-    gigachat_ca_bundle_file: Path | None = None,
-) -> LLMClient:
-    if provider == "mock":
-        return MockLLMClient()
-    if provider == "openai_compatible":
-        return OpenAICompatibleLLMClient(
-            base_url=base_url,
-            model=model,
-            api_key=api_key,
-            timeout_seconds=timeout_seconds,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-        )
-    if provider == "gigachat":
-        return GigaChatLLMClient(
-            credentials=gigachat_credentials,
-            scope=gigachat_scope,
-            model=gigachat_model,
-            base_url=gigachat_base_url,
-            auth_url=gigachat_auth_url,
-            timeout_seconds=timeout_seconds,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            verify_ssl=gigachat_verify_ssl,
-            ca_bundle_file=gigachat_ca_bundle_file,
-        )
-    raise ValueError(f"Неизвестный LLM_PROVIDER: {provider}")

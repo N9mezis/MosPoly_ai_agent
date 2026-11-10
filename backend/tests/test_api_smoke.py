@@ -57,11 +57,16 @@ def test_error_format_for_unimplemented(client):
         assert set(response.json()["error"]) == {"code", "message", "details"}
 
 
-def test_analysis_result_contract(client):
-    response = client.get("/api/v1/analyses/00000000-0000-4000-8000-000000000001/result")
-    assert response.status_code == 200
-    body = response.json()
-    categories = [finding["category"] for finding in body["findings"]]
+def test_fixture_result_matches_contract():
+    """Фикстура для разработки отчётов/фронта соблюдает порядок категорий (Ф-10)."""
+    from app.api.v1.fixtures import fixture_result
+
+    categories = [finding.category.value for finding in fixture_result().findings]
     order = {"critical": 0, "recommended": 1, "info": 2}
-    assert categories == sorted(categories, key=order.__getitem__), "критические — первыми (Ф-10)"
-    assert body["disclaimer"]
+    assert categories == sorted(categories, key=order.__getitem__)
+
+
+def test_unknown_analysis_is_404(client):
+    response = client.get("/api/v1/analyses/00000000-0000-4000-8000-00000000ffff")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"

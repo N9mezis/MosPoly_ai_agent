@@ -49,6 +49,7 @@ def validate_chunk_result(
     status = result.status
     law_text = "\n".join(item.regulation.text for item in regulations)
     source = result.source
+    regulation_chunk_id: str | None = None
 
     contract_quote_valid = _normalized_contains(chunk.text, result.contract_quote)
     law_quote_valid = _normalized_contains(law_text, result.law_quote)
@@ -64,6 +65,7 @@ def validate_chunk_result(
         )
         if matching_regulation is not None:
             source = matching_regulation.citation
+            regulation_chunk_id = matching_regulation.chunk_id
 
     if result.contract_quote and not contract_quote_valid:
         notes.append("Цитата договора отсутствует в проверяемом чанке")
@@ -111,6 +113,8 @@ def validate_chunk_result(
         contract_quote=result.contract_quote,
         law_quote=result.law_quote,
         comment=result.comment,
+        recommendation=result.recommendation,
         retrieval_score=top_score,
         validation_notes=notes,
+        regulation_chunk_id=regulation_chunk_id,
     )

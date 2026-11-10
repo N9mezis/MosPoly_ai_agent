@@ -1,5 +1,6 @@
 {
-  "source_id": "tk_rf_example",
+  "source_id": "tk_rf",
+  "label": "Короткое описание редакции",
   "source_title": "Трудовой кодекс Российской Федерации",
   "source_url": "https://pravo.gov.ru/",
   "edition_date": "YYYY-MM-DD",
@@ -7,10 +8,11 @@
   "effective_to": null,
   "chunks": [
     {
-      "chunk_id": "tk_rf_example_article_00_1",
+      "chunk_id": "tk_rf_article_00_1",
       "article": "00",
+      "part": "1",
+      "title": "Название статьи",
       "text": "Вставьте сюда точный фрагмент нормы из официального источника."
     }
   ]
 }
-

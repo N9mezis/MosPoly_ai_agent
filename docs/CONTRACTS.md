@@ -43,20 +43,23 @@
 | `GET/POST /organizations` | B | 501 | организации (service_admin) |
 | `GET /document-types` | A | ✅ | каталог типов документов |
 | `POST /documents` | A | ✅ | multipart `file` → `DocumentUploaded` (валидация Ф-01) |
-| `POST /analyses` | A | заглушка | `{document_id, document_type_id}` + заголовок `Idempotency-Key` → 202 `AnalysisCreated` |
-| `GET /analyses` | A | заглушка | история: `?status=&page=&page_size=` → `Page[AnalysisListItem]` |
-| `GET /analyses/{id}` | A | заглушка | статус: `AnalysisStatusOut` (опрос каждые 1–2 с) |
-| `GET /analyses/{id}/result` | A | заглушка | `AnalysisResult`; 409, если проверка ещё не завершена |
-| `DELETE /analyses/{id}` | A | заглушка | отмена или удаление |
+| `POST /analyses` | A | ✅ | `{document_id, document_type_id}` + заголовок `Idempotency-Key` → 202 `AnalysisCreated` |
+| `GET /analyses` | A | ✅ | история: `?status=&page=&page_size=` → `Page[AnalysisListItem]` |
+| `GET /analyses/{id}` | A | ✅ | статус: `AnalysisStatusOut` (опрос каждые 1–2 с) |
+| `GET /analyses/{id}/result` | A | ✅ | `AnalysisResult`; 409, если проверка ещё не завершена |
+| `DELETE /analyses/{id}` | A | ✅ | отмена или удаление |
 | `GET /analyses/{id}/report?format=pdf\|docx` | B | 501 | файл отчёта |
-| `GET /regulations` | A | заглушка | источники с версиями |
-| `POST /regulations` | A | заглушка | multipart `file` (JSON) → версия в статусе `indexing` |
-| `GET /regulations/versions/{id}/chunks` | A | заглушка | фрагменты версии |
-| `POST /regulations/versions/{id}/activate` | A | заглушка | активация или откат |
-| `POST /regulations/versions/{id}/archive` | A | заглушка | архивирование |
+| `GET /regulations` | A | ✅ | источники с версиями |
+| `POST /regulations?activate=` | A | ✅ | multipart `file` (JSON) → версия `draft`, индексация в воркере → `ready` |
+| `GET /regulations/versions/{id}/chunks` | A | ✅ | фрагменты версии |
+| `POST /regulations/versions/{id}/activate` | A | ✅ | активация или откат |
+| `POST /regulations/versions/{id}/archive` | A | ✅ | архивирование |
+| `POST /regulations/versions/{id}/reindex` | A | ✅ | пересчёт эмбеддингов версии |
 | `GET /healthz`, `GET /readyz` | общие | ✅ | пробы |
 
-**Заглушки** возвращают фикстуры из `api/v1/fixtures.py` и заголовок `X-Stub: true`. Формат ответа заглушки совпадает с итоговым, поэтому фронт, написанный на заглушках, продолжит работать после их замены.
+Эндпоинты проверок и нормативки работают по-настоящему (конвейер, воркер, БД). Фикстуры в `api/v1/fixtures.py` оставлены для разработки отчётов и вёрстки (`fixture_result()` — полный `AnalysisResult` с подсветкой).
+
+Статусы версий нормативки: `draft` → `indexing` → `ready` → `active` / `archived`, при ошибке индексации — `failed` (причина в `error_message`). Код ошибки при пустой базе — `knowledge_base_empty`.
 
 ### Сценарий фронта (Ф-11)
 
@@ -119,9 +122,9 @@ async def log_event(session, *, actor, action, entity_type, entity_id, payload=N
 # В payload нельзя класть ПДн, тексты договоров и секреты.
 
 # Для отчётов (B): получить готовый результат
-# app/analysis/results.py (A, появится вместе с настоящим конвейером):
+# app/analysis/results.py (A, готово):
 async def load_analysis_result(session, analysis_id, user: CurrentUser) -> AnalysisResult
-# До этого B разрабатывает отчёты на app.api.v1.fixtures.fixture_result().
+#   проверяет права (can_read_analysis), 404 для чужих, 409 если проверка не завершена.
 ```
 
 ## 5. Данные и инварианты

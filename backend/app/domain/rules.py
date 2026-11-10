@@ -114,6 +114,39 @@ SCHEDULE_VAGUE_PATTERN = re.compile(
 )
 
 
+RULE_RECOMMENDATIONS = {
+    "weekly_hours_over_40": "Установить продолжительность рабочего времени не более 40 часов в неделю.",
+    "annual_paid_leave_under_28_days": (
+        "Указать продолжительность ежегодного основного оплачиваемого отпуска "
+        "не менее 28 календарных дней."
+    ),
+    "salary_once_per_month": (
+        "Указать не менее двух дат выплаты заработной платы в месяц с интервалом "
+        "не более полумесяца (например, 25-го числа текущего и 10-го числа следующего месяца)."
+    ),
+    "probation_over_3_months": (
+        "Сократить срок испытания до трёх месяцев либо указать, что должность относится "
+        "к категориям, для которых допускается срок до шести месяцев."
+    ),
+    "missing_or_vague_workplace": (
+        "Указать место работы: наименование работодателя или обособленного подразделения "
+        "и его местонахождение."
+    ),
+    "missing_or_vague_job_function": (
+        "Указать трудовую функцию: должность по штатному расписанию с указанием "
+        "квалификации или конкретный вид поручаемой работы."
+    ),
+    "missing_or_vague_salary_amount": (
+        "Указать конкретный размер тарифной ставки или оклада, а также доплаты, "
+        "надбавки и поощрительные выплаты."
+    ),
+    "missing_or_unilateral_work_schedule": (
+        "Указать режим рабочего времени и времени отдыха либо сослаться на правила "
+        "внутреннего трудового распорядка; изменение графика — с уведомлением работника."
+    ),
+}
+
+
 def _normalized_contains(container: str, quote: str) -> bool:
     normalized_container = " ".join(container.lower().split())
     normalized_quote = " ".join(quote.lower().split())
@@ -157,7 +190,11 @@ def _finding(
         contract_quote=_sentence_with_match(chunk.text, pattern),
         law_quote=law_quote,
         comment=comment,
+        recommendation=RULE_RECOMMENDATIONS.get(rule_name, ""),
         validation_notes=[f"Детерминированное правило: {rule_name}"],
+        origin="rule",
+        rule_id=rule_name,
+        regulation_chunk_id=regulation.chunk_id,
     )
 
 
@@ -183,7 +220,11 @@ def _required_term_finding(
         contract_quote=(CLAUSE_ID_PATTERN.sub("", chunk.text).strip() if chunk else ""),
         law_quote=law_quote,
         comment=comment,
+        recommendation=RULE_RECOMMENDATIONS.get(rule_name, ""),
         validation_notes=[f"Детерминированное правило всего договора: {rule_name}"],
+        origin="rule_required",
+        rule_id=rule_name,
+        regulation_chunk_id=regulation.chunk_id,
     )
 
 
