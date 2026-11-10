@@ -43,4 +43,10 @@ blockquote { margin: .65rem 0; padding: .5rem .75rem; background: #f3f6fa; }
 .table-scroll { overflow-x: auto; margin-bottom: 1rem; }
 .history-table { width: 100%; border-collapse: collapse; text-align: left; }
 .history-table th, .history-table td { padding: .65rem; border-bottom: 1px solid #d6e0ea; vertical-align: top; }
+.admin-form { max-width: 32rem; margin: 1.5rem 0; }
+.regulation-source { margin-top: 1.5rem; }
+.regulation-chunks { max-height: 26rem; overflow: auto; padding: 1rem; border: 1px solid #d6e0ea; border-radius: .5rem; }
+.regulation-chunks details { margin-bottom: .55rem; }
+.regulation-chunks summary { cursor: pointer; font-weight: 600; }
+.regulation-chunks p { white-space: pre-wrap; }
 @media (max-width: 48rem) { .columns { grid-template-columns: 1fr; } }
