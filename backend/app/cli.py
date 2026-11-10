@@ -91,41 +91,51 @@ async def _reindex() -> None:
         print(f"• {version_id}: {version.status.value}, модель {version.embedding_model}")
 
 
-async def _check_gigachat() -> None:
+async def _check_gigachat(smoke: bool) -> None:
     from app.llm.factory import gigachat_http
+    from app.llm.gigachat import GigaChatEmbedder
 
     settings = get_settings()
     ok = True
-    for title, creds, scope, model in (
+    checks = (
         (
             "LLM",
-            settings.gigachat_llm_credentials,
+            settings.gigachat_llm_key(),
             settings.gigachat_llm_scope,
             settings.gigachat_llm_model,
         ),
         (
             "Эмбеддинги",
-            settings.gigachat_embed_credentials,
+            settings.gigachat_embed_key(),
             settings.gigachat_embed_scope,
             settings.gigachat_embed_model,
         ),
-    ):
-        secret = creds.get_secret_value()
-        if not secret:
-            print(f"✗ {title}: ключ не задан")
+    )
+    for title, key, scope, model in checks:
+        if not key:
+            print(f"✗ {title}: не заданы GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET")
             ok = False
             continue
+        http = gigachat_http(settings, credentials=key, scope=scope)
         try:
-            models = await gigachat_http(settings, credentials=secret, scope=scope).list_models()
+            models = await http.list_models()
         except Exception as error:
             print(f"✗ {title}: {error}")
             ok = False
             continue
-        mark = "✓" if model in models else "!"
+        available = model in models
         print(
-            f"{mark} {title}: ключ принят, модель {model} {'доступна' if model in models else 'не найдена в списке'}"
+            f"{'✓' if available else '!'} {title}: ключ принят (scope {scope}), модель {model} "
+            f"{'доступна' if available else 'не найдена в списке'}"
         )
         print(f"  доступные модели: {', '.join(models)}")
+        if smoke and title == "Эмбеддинги":
+            try:
+                vector = (await GigaChatEmbedder(http, model=model).embed(["проверка связи"]))[0]
+                print(f"  тестовый эмбеддинг: размерность {len(vector)}")
+            except Exception as error:
+                print(f"✗ эмбеддинг не получен: {error}")
+                ok = False
     if not ok:
         sys.exit(1)
 
@@ -190,7 +200,10 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("seed", help="Создать организацию, сид-админа, типы документов, профиль")
-    sub.add_parser("check-gigachat", help="Проверить оба ключа GigaChat (LLM и эмбеддинги)")
+    p_check = sub.add_parser(
+        "check-gigachat", help="Проверить доступ к GigaChat (LLM и эмбеддинги)"
+    )
+    p_check.add_argument("--smoke", action="store_true", help="Сделать один тестовый эмбеддинг")
     p_import = sub.add_parser(
         "import-kb", help="Загрузить, проиндексировать и активировать нормативку"
     )
@@ -238,7 +251,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "reindex":
         asyncio.run(_reindex())
     elif args.command == "check-gigachat":
-        asyncio.run(_check_gigachat())
+        asyncio.run(_check_gigachat(args.smoke))
     elif args.command == "evaluate":
         from app.evals.runner import run_findings_eval
 

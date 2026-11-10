@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Protocol
 
 import httpx
+
+from app.llm.calllog import record_call
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +114,12 @@ class LLMListwiseReranker:
 
 
 class HttpReranker:
-    """Внешний реранкер: POST {url} {model, query, documents, top_n} → results[{index, score}]."""
+    """Внешний реранкер по HTTP.
+
+    format="tei"    — HuggingFace Text Embeddings Inference: {query, texts} → [{index, score}];
+    format="cohere" — Cohere / Jina: {model, query, documents, top_n} → {results: [{index,
+                      relevance_score}]}.
+    """
 
     name = "http"
 
@@ -121,38 +129,70 @@ class HttpReranker:
         *,
         api_key: str = "",
         model: str = "",
-        timeout_seconds: float = 30.0,
+        format: str = "tei",
+        timeout_seconds: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not url:
             raise ValueError("RERANKER=http, но не задан RERANK_HTTP_URL")
+        if format not in ("tei", "cohere"):
+            raise ValueError("RERANK_HTTP_FORMAT должен быть tei или cohere")
         self._url = url
         self._api_key = api_key
         self._model = model
+        self._format = format
         self._timeout = timeout_seconds
         self._transport = transport
+        self.name = f"http:{format}"
+
+    def _body(self, query: str, documents: list[str]) -> dict:
+        if self._format == "tei":
+            return {"query": query, "texts": documents, "truncate": True, "raw_scores": False}
+        body: dict = {"query": query, "documents": documents, "top_n": len(documents)}
+        if self._model:
+            body["model"] = self._model
+        return body
 
     async def rerank(self, query: str, documents: list[str]) -> list[float] | None:
         if len(documents) < 2:
             return None
-        body: dict = {"query": query, "documents": documents, "top_n": len(documents)}
-        if self._model:
-            body["model"] = self._model
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout, transport=self._transport
             ) as client:
-                response = await client.post(self._url, json=body, headers=headers)
+                response = await client.post(
+                    self._url, json=self._body(query, documents), headers=headers
+                )
                 response.raise_for_status()
                 data = response.json()
-            items = data.get("results", data if isinstance(data, list) else [])
+            items = data if isinstance(data, list) else data.get("results", [])
             scores = [0.0] * len(documents)
             for item in items:
                 score = item.get("relevance_score", item.get("score", 0.0))
                 scores[int(item["index"])] = float(score)
+            record_call(
+                "rerank",
+                self.name,
+                self._model,
+                1,
+                int((time.monotonic() - started) * 1000),
+                response.status_code,
+                "ok",
+            )
             return scores
         except Exception as error:
+            record_call(
+                "rerank",
+                self.name,
+                self._model,
+                1,
+                int((time.monotonic() - started) * 1000),
+                None,
+                "error",
+                type(error).__name__,
+            )
             logger.warning(
                 "HTTP-реранкер не сработал (%s), используем порядок RRF", type(error).__name__
             )

@@ -30,7 +30,7 @@ def gigachat_http(settings: Settings, *, credentials: str, scope: str) -> GigaCh
 def llm_http(settings: Settings) -> GigaChatHTTP:
     return gigachat_http(
         settings,
-        credentials=settings.gigachat_llm_credentials.get_secret_value(),
+        credentials=settings.gigachat_llm_key(),
         scope=settings.gigachat_llm_scope,
     )
 
@@ -47,8 +47,10 @@ def build_llm_client(settings: Settings) -> LLMClient:
             temperature=settings.llm_temperature,
             max_output_tokens=settings.llm_max_output_tokens,
         )
-    if not settings.gigachat_llm_credentials.get_secret_value():
-        raise ValueError("LLM_PROVIDER=gigachat, но не задан GIGACHAT_LLM_CREDENTIALS")
+    if not settings.gigachat_llm_key():
+        raise ValueError(
+            "LLM_PROVIDER=gigachat, но не заданы GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET"
+        )
     return GigaChatLLMClient(
         http=llm_http(settings),
         model=settings.gigachat_llm_model,
@@ -60,9 +62,11 @@ def build_llm_client(settings: Settings) -> LLMClient:
 def build_embedder(settings: Settings) -> AsyncEmbedder:
     if settings.embedding_provider == "hashing":
         return AsyncHashingEmbedder()
-    credentials = settings.gigachat_embed_credentials.get_secret_value()
+    credentials = settings.gigachat_embed_key()
     if not credentials:
-        raise ValueError("EMBEDDING_PROVIDER=gigachat, но не задан GIGACHAT_EMBED_CREDENTIALS")
+        raise ValueError(
+            "EMBEDDING_PROVIDER=gigachat, но не заданы GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET"
+        )
     return GigaChatEmbedder(
         gigachat_http(settings, credentials=credentials, scope=settings.gigachat_embed_scope),
         model=settings.gigachat_embed_model,
@@ -80,9 +84,10 @@ def build_reranker(settings: Settings):
             settings.rerank_http_url,
             api_key=settings.rerank_http_api_key.get_secret_value(),
             model=settings.rerank_http_model,
+            format=settings.rerank_http_format,
         )
-    if not settings.gigachat_llm_credentials.get_secret_value():
-        raise ValueError("RERANKER=gigachat, но не задан GIGACHAT_LLM_CREDENTIALS")
+    if not settings.gigachat_llm_key():
+        raise ValueError("RERANKER=gigachat, но не заданы учётные данные GigaChat")
     return LLMListwiseReranker(
         GigaChatLLMClient(
             http=llm_http(settings),
