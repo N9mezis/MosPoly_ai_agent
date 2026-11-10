@@ -95,3 +95,31 @@ def test_free_text_chunks_overlap_by_paragraph() -> None:
     chunks = chunk_paragraphs(paragraphs, target=1000)
     assert len(chunks) == 3
     assert chunks[1].startswith("а" * 600)
+
+
+def test_http_reranker_tei_and_cohere_formats() -> None:
+    import asyncio
+    import json
+
+    import httpx
+
+    from app.knowledge.rerank import HttpReranker
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen[request.url.path] = body
+        if request.url.path == "/tei":
+            return httpx.Response(
+                200, json=[{"index": 1, "score": 0.9}, {"index": 0, "score": 0.1}]
+            )
+        return httpx.Response(200, json={"results": [{"index": 0, "relevance_score": 0.7}]})
+
+    transport = httpx.MockTransport(handler)
+    tei = HttpReranker("http://r/tei", format="tei", transport=transport)
+    cohere = HttpReranker("http://r/co", format="cohere", model="m", transport=transport)
+    assert asyncio.run(tei.rerank("q", ["a", "b"])) == [0.1, 0.9]
+    assert asyncio.run(cohere.rerank("q", ["a", "b"])) == [0.7, 0.0]
+    assert seen["/tei"]["texts"] == ["a", "b"]
+    assert seen["/co"]["documents"] == ["a", "b"] and seen["/co"]["model"] == "m"

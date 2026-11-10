@@ -42,17 +42,24 @@ git clone https://github.com/N9mezis/MosPoly_ai_agent.git && cd MosPoly_ai_agent
 
 ## Подключение GigaChat
 
-В [личном кабинете](https://developers.sber.ru/studio) создайте два проекта GigaChat API и получите по Authorization key для каждого. Один ключ используется для генерации, второй для эмбеддингов. Впишите их в `.env`:
+В [личном кабинете](https://developers.sber.ru/studio) создайте проект GigaChat API и скопируйте **Client ID** и **Client Secret**. Впишите их в `.env`:
 
 ```dotenv
 LLM_PROVIDER=gigachat
-GIGACHAT_LLM_CREDENTIALS=...
+GIGACHAT_CLIENT_ID=...
+GIGACHAT_CLIENT_SECRET=...
+GIGACHAT_LLM_SCOPE=GIGACHAT_API_PERS
 GIGACHAT_LLM_MODEL=GigaChat-2
 
 EMBEDDING_PROVIDER=gigachat
-GIGACHAT_EMBED_CREDENTIALS=...
 GIGACHAT_EMBED_MODEL=Embeddings
 ```
+
+Authorization key собирается из этой пары автоматически. По умолчанию эмбеддинги идут на тех же учётных данных; для отдельного проекта задайте `GIGACHAT_EMBED_CLIENT_ID` и `GIGACHAT_EMBED_CLIENT_SECRET`. Готовый authorization key тоже можно передать напрямую: `GIGACHAT_LLM_CREDENTIALS`.
+
+Проверка доступа: `docker compose run --rm api python -m app.cli check-gigachat --smoke`. После включения `EMBEDDING_PROVIDER=gigachat` пересчитайте эмбеддинги нормативки: `docker compose run --rm api python -m app.cli reindex`.
+
+Реранкер (`RERANKER`): `none` — порядок гибридного поиска (по умолчанию), `gigachat` — реранкинг через GigaChat тем же ключом. Подробнее — [docs/RAG.md](docs/RAG.md).
 
 Затем перезапустите контейнеры: `docker compose up -d`. Сертификат НУЦ Минцифры уже лежит в `certs/` и подключается автоматически. Ключи хранятся только в `.env`, который не попадает в Git.
 
