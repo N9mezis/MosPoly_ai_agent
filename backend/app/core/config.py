@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     jwt_secret: SecretStr = SecretStr("change-me-in-env")
     jwt_access_ttl_minutes: int = 30
     jwt_refresh_ttl_days: int = 14
-    # Пока auth не реализована, все запросы выполняются от имени dev-пользователя.
+    # В режиме разработки запросы выполняются от имени dev-пользователя.
     auth_dev_mode: bool = True
     seed_admin_email: str = "admin@example.com"
     seed_admin_password: SecretStr = SecretStr("admin12345")
@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @model_validator(mode="after")
+    def validate_auth_settings(self) -> Settings:
+        secret = self.jwt_secret.get_secret_value()
+        if not self.auth_dev_mode and (
+            len(secret.encode()) < 32 or secret == "change-me-please-long-random-string"
+        ):
+            raise ValueError("Для AUTH_DEV_MODE=false задайте случайный JWT_SECRET от 32 байт")
+        return self
 
     def resolve_path(self, path: Path) -> Path:
         return path if path.is_absolute() else self.repo_root / path
