@@ -8,7 +8,7 @@ from __future__ import annotations
 from app.core.config import Settings
 
 from .client import GigaChatLLMClient, LLMClient, MockLLMClient, OpenAICompatibleLLMClient
-from .embeddings import AsyncEmbedder, AsyncHashingEmbedder
+from .embeddings import AsyncEmbedder, AsyncHashingEmbedder, OpenAICompatibleEmbedder
 from .gigachat import GigaChatAuth, GigaChatEmbedder, GigaChatHTTP, build_ssl_context
 
 
@@ -62,6 +62,19 @@ def build_llm_client(settings: Settings) -> LLMClient:
 def build_embedder(settings: Settings) -> AsyncEmbedder:
     if settings.embedding_provider == "hashing":
         return AsyncHashingEmbedder()
+    if settings.embedding_provider == "openai_compatible":
+        return OpenAICompatibleEmbedder(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key.get_secret_value(),
+            model=settings.embedding_model,
+            batch_size=settings.embedding_batch_size,
+            query_instruction=settings.embedding_query_instruction,
+            dimensions=settings.embedding_dimensions,
+            timeout_seconds=settings.llm_timeout_seconds,
+            provider="cloudru"
+            if "cloud.ru" in settings.embedding_base_url
+            else "openai_compatible",
+        )
     credentials = settings.gigachat_embed_key()
     if not credentials:
         raise ValueError(

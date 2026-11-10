@@ -153,3 +153,22 @@ def test_hides_self_contradictory_or_missing_term_chunk_violation(comment: str) 
 
     assert validated.status == CheckStatus.NOT_APPLICABLE
     assert validated.validation_notes
+
+
+def test_finding_quoting_only_placeholders_is_hidden() -> None:
+    from app.domain.validation import _only_placeholders
+
+    assert _only_placeholders("[PERSON]")
+    assert _only_placeholders("[PERSON], [PASSPORT]")
+    assert not _only_placeholders("Работник [PERSON] принимается на должность")
+
+
+def test_chunk_level_missing_term_claims_are_hidden() -> None:
+    from app.domain.validation import MISSING_TERM_COMMENT_PATTERN
+
+    for comment in (
+        "Договор не уточняет конкретные сроки выплаты заработной платы",
+        "Договор не устанавливает конкретный размер оклада",
+        "Договор указывает лишь на предоставление расчетного листка",
+    ):
+        assert MISSING_TERM_COMMENT_PATTERN.search(comment), comment

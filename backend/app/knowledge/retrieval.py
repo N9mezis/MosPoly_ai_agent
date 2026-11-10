@@ -65,6 +65,40 @@ class RetrievalSettings:
     channel_weights: dict[str, float] = field(
         default_factory=lambda: {"dense": 1.0, "lexical": 1.0, "hints": 2.0}
     )
+    # Статьи вне рамок профиля (например, раздел XII ТК — особые категории работников)
+    # исключаются из поиска; диапазон открывается, если в документе есть признак.
+    excluded_article_ranges: list[tuple[float, float]] = field(default_factory=list)
+    unlock_triggers: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+
+    @classmethod
+    def from_params(cls, params: dict, defaults) -> RetrievalSettings:
+        def ranges(items) -> list[tuple[float, float]]:
+            return [(float(lo), float(hi)) for lo, hi in items]
+
+        return cls(
+            candidates=int(params.get("candidates", defaults.retrieval_candidates)),
+            top_k=int(params.get("top_k", defaults.retrieval_top_k)),
+            similarity_floor=float(
+                params.get("similarity_floor", defaults.retrieval_similarity_floor)
+            ),
+            article_hints=dict(params.get("article_hints", {})),
+            excluded_article_ranges=ranges(params.get("excluded_article_ranges", [])),
+            unlock_triggers={
+                key: ranges(value) for key, value in params.get("unlock_triggers", {}).items()
+            },
+        )
+
+
+def article_number(article: str | None) -> float | None:
+    """«312.1» → 312.1, «341.1-1» → 341.1; None для фрагментов без статьи."""
+    if not article:
+        return None
+    match = re.match(r"\d+(?:\.\d+)?", article)
+    return float(match.group(0)) if match else None
+
+
+def _in_ranges(value: float, ranges: list[tuple[float, float]]) -> bool:
+    return any(lo <= value <= hi for lo, hi in ranges)
 
 
 def build_tsquery(text: str, limit: int = 48) -> str:
@@ -170,6 +204,8 @@ class HybridRetriever:
         self._reranker = reranker or NoReranker()
         self._chunks: dict[str, DomainChunk] = {}
         self._bm25: BM25Index | None = None
+        self._allowed: set[str] | None = None
+        self.unlocked_ranges: list[tuple[float, float]] = []
         self._by_article: dict[str, list[DomainChunk]] = {}
 
     @property
@@ -201,6 +237,26 @@ class HybridRetriever:
             )
             self._bm25 = BM25Index({str(cid): parse_tsvector(fts) for cid, fts in rows})
 
+    def set_document_context(self, document_text: str) -> None:
+        """Сужает область поиска под документ: исключённые диапазоны статей остаются
+        закрытыми, пока в тексте нет признака (например, «совместительство»)."""
+        excluded = self.settings.excluded_article_ranges
+        if not excluded:
+            self._allowed = None
+            return
+        lowered = document_text.lower().replace("ё", "е")
+        unlocked: list[tuple[float, float]] = []
+        for trigger, ranges in self.settings.unlock_triggers.items():
+            if trigger.lower() in lowered:
+                unlocked.extend(ranges)
+        self.unlocked_ranges = unlocked
+        allowed: set[str] = set()
+        for chunk_id, chunk in self._chunks.items():
+            number = article_number(chunk.article)
+            if number is None or not _in_ranges(number, excluded) or _in_ranges(number, unlocked):
+                allowed.add(chunk_id)
+        self._allowed = allowed
+
     # ArticleLookup — прямая выборка по статье (правила, проверка полноты).
     def find_by_article(self, article: str) -> list[DomainChunk]:
         return list(self._by_article.get(article, []))
@@ -212,7 +268,9 @@ class HybridRetriever:
         rows = await session.execute(
             select(RegulationChunk.id, distance)
             .where(
-                RegulationChunk.id.in_([uuid.UUID(i) for i in (ids or self._chunks)]),
+                RegulationChunk.id.in_(
+                    [uuid.UUID(i) for i in (ids or self._allowed or self._chunks)]
+                ),
                 RegulationChunk.embedding.is_not(None),
                 func.vector_dims(RegulationChunk.embedding) == len(vector),
             )
@@ -228,7 +286,7 @@ class HybridRetriever:
             return {}
         lexemes = await session.scalar(select(cast(func.to_tsvector("russian", cleaned), Text)))
         terms = parse_tsvector(lexemes or "")
-        return self._bm25.search(list(terms), limit=CHANNEL_LIMIT)
+        return self._bm25.search(list(terms), limit=CHANNEL_LIMIT, allowed=self._allowed)
 
     async def _hints(
         self, session: AsyncSession, query: str, vector: list[float] | None
@@ -237,7 +295,11 @@ class HybridRetriever:
         Порядок: по одной лучшей части каждой статьи, затем остальные."""
         per_article: list[list[str]] = []
         for article in hinted_articles(query, self.settings.article_hints):
-            ids = [chunk.db_id for chunk in self._by_article.get(article, []) if chunk.db_id]
+            ids = [
+                chunk.db_id
+                for chunk in self._by_article.get(article, [])
+                if chunk.db_id and (self._allowed is None or chunk.db_id in self._allowed)
+            ]
             if not ids:
                 continue
             if vector is not None and len(ids) > 1:
@@ -268,7 +330,9 @@ class HybridRetriever:
         hints: list[str] = []
         vector = None
         if active & {"dense", "hints"}:
-            vector = (await self._embedder.embed([query]))[0]
+            # Instruction-aware модели (Qwen3-Embedding) ждут у запроса инструкцию.
+            query_text = getattr(self._embedder, "query_text", lambda text: text)(query)
+            vector = (await self._embedder.embed([query_text]))[0]
         async with self._sessionmaker() as session:
             if "dense" in active:
                 dense = await self._dense(session, vector)

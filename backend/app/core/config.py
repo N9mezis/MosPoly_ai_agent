@@ -82,7 +82,16 @@ class Settings(BaseSettings):
     gigachat_embed_model: str = "Embeddings"
 
     # --- эмбеддинги и поиск ---
-    embedding_provider: Literal["hashing", "gigachat"] = "hashing"
+    embedding_provider: Literal["hashing", "gigachat", "openai_compatible"] = "hashing"
+    # openai_compatible (Cloud.ru Foundation Models и т. п.)
+    embedding_base_url: str = "https://foundation-models.api.cloud.ru/v1"
+    embedding_api_key: SecretStr = SecretStr("")
+    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embedding_dimensions: int | None = None
+    # Инструкция для запросов instruction-aware моделей (Qwen3-Embedding); пусто — без неё.
+    embedding_query_instruction: str = (
+        "Найди нормы Трудового кодекса РФ, применимые к этому пункту трудового договора"
+    )
     embedding_batch_size: int = 16
     retrieval_candidates: int = 12
     retrieval_top_k: int = 4

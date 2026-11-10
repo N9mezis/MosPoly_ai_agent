@@ -255,14 +255,7 @@ async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
 
         # 3. Снимок нормативки и поиск.
         settings = deps.settings
-        retrieval_settings = RetrievalSettings(
-            candidates=int(profile_params.get("candidates", settings.retrieval_candidates)),
-            top_k=int(profile_params.get("top_k", settings.retrieval_top_k)),
-            similarity_floor=float(
-                profile_params.get("similarity_floor", settings.retrieval_similarity_floor)
-            ),
-            article_hints=dict(profile_params.get("article_hints", {})),
-        )
+        retrieval_settings = RetrievalSettings.from_params(profile_params, settings)
         retriever = HybridRetriever(
             sessionmaker,
             CachedEmbedder(deps.embedder, sessionmaker),

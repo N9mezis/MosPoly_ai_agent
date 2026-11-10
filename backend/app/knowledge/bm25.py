@@ -35,10 +35,14 @@ class BM25Index:
         total = len(documents)
         self._idf = {term: math.log(1 + (total - n + 0.5) / (n + 0.5)) for term, n in df.items()}
 
-    def search(self, terms: Counter[str] | list[str], limit: int = 20) -> dict[str, float]:
+    def search(
+        self, terms: Counter[str] | list[str], limit: int = 20, allowed: set[str] | None = None
+    ) -> dict[str, float]:
         query = list(terms)
         scores: dict[str, float] = {}
         for doc_id, tf in self._docs.items():
+            if allowed is not None and doc_id not in allowed:
+                continue
             length_norm = self._k1 * (1 - self._b + self._b * self._lengths[doc_id] / self._avg)
             score = 0.0
             for term in query:
