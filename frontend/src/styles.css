@@ -175,3 +175,31 @@ blockquote { margin: .65rem 0; padding: .5rem .75rem; background: var(--page); }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; }
 }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.error p { margin: 4px 0 0; }
+.analysis-steps { display: grid; gap: 8px; margin: 14px 0 18px; padding: 0; list-style: none; }
+.analysis-steps li { padding: 8px 12px; border-left: 2px solid var(--line); }
+.analysis-steps li[data-done="true"] { border-color: var(--brand); }
+.analysis-steps li[aria-current="step"] { border-color: var(--info); background: var(--info-bg); color: var(--info); }
+.status-links, .run-evidence { margin-top: 18px; }
+.cancel-confirm { padding: 14px; border: 1px solid var(--line); border-radius: var(--middle-radius); }
+button.danger-action { background: var(--danger); }
+button.danger-action:hover:not(:disabled) { background: #991b1b; }
+button.metric-filter { border-color: var(--line); background: var(--card); color: var(--text); text-align: left; }
+button.metric-filter:hover, button.metric-filter[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); }
+.finding-controls { display: flex; align-items: end; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin: 14px 0; }
+.finding-controls p { margin: 0; }
+.evidence-actions { margin: 10px 0; }
+.regulation-evidence { border-top: 1px solid var(--line); padding-top: 12px; }
+.regulation-evidence details, .run-evidence { padding: 10px 12px; border-radius: var(--small-radius); background: var(--page); }
+.regulation-evidence summary, .run-evidence summary { cursor: pointer; font-weight: 600; }
+.regulation-evidence details p { margin: 8px 0; }
+.regulation-text { white-space: pre-wrap; }
+.run-evidence dt { font-weight: 600; }
+.run-evidence dd { margin: 0 0 8px; overflow-wrap: anywhere; }
+.run-evidence dd ul { margin: 0; padding-left: 18px; }
+.lookup-form { display: flex; align-items: end; flex-wrap: wrap; margin: 0 0 1.2rem; }
+.lookup-form label { flex: 1 1 250px; max-width: 420px; }
+.lookup-form .error { flex: 1 0 100%; }
+.history-flag { display: flex; width: fit-content; margin-top: 6px; }

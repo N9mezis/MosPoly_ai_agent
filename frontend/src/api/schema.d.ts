@@ -215,6 +215,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analyses/{analysis_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Отменить активную проверку без удаления сохранённого отчёта */
+        post: operations["cancel_analysis_api_v1_analyses__analysis_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analyses/{analysis_id}/report": {
         parameters: {
             query?: never;
@@ -408,6 +425,16 @@ export interface components {
             created_at: string;
             /** Finished At */
             finished_at?: string | null;
+            /**
+             * Is Partial
+             * @default false
+             */
+            is_partial: boolean;
+            /**
+             * Has Regulation Updates
+             * @default false
+             */
+            has_regulation_updates: boolean;
         };
         /** AnalysisResult */
         AnalysisResult: {
@@ -449,6 +476,41 @@ export interface components {
              * @default Результат проверки носит рекомендательный характер и не является юридическим заключением. Спорные случаи требуют оценки специалиста.
              */
             disclaimer: string;
+            snapshot?: components["schemas"]["AnalysisSnapshotOut"] | null;
+        };
+        /**
+         * AnalysisSnapshotOut
+         * @description Public metadata of the stored run, not a replay request.
+         */
+        AnalysisSnapshotOut: {
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Regulation Version Ids */
+            regulation_version_ids?: string[];
+            /**
+             * Llm Provider
+             * @default
+             */
+            llm_provider: string;
+            /**
+             * Llm Model
+             * @default
+             */
+            llm_model: string;
+            /**
+             * Embedding Model
+             * @default
+             */
+            embedding_model: string;
+            /**
+             * Reranker
+             * @default
+             */
+            reranker: string;
+            /** Prompt Hashes */
+            prompt_hashes?: {
+                [key: string]: string;
+            };
         };
         /**
          * AnalysisStatus
@@ -476,6 +538,16 @@ export interface components {
              * @default 0
              */
             progress: number;
+            /**
+             * Chunks Done
+             * @default 0
+             */
+            chunks_done: number;
+            /**
+             * Chunks Total
+             * @default 0
+             */
+            chunks_total: number;
             /** Error Code */
             error_code?: string | null;
             /**
@@ -838,6 +910,18 @@ export interface components {
             effective_to?: string | null;
             /** Url */
             url?: string | null;
+            /** Version Id */
+            version_id?: string | null;
+            /** Full Text */
+            full_text?: string | null;
+            /**
+             * Update Status
+             * @default unknown
+             * @enum {string}
+             */
+            update_status: "unchanged" | "changed" | "not_in_active" | "unknown";
+            /** Active Edition Date */
+            active_edition_date?: string | null;
         };
         /** RegulationSourceOut */
         RegulationSourceOut: {
@@ -1474,7 +1558,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1588,6 +1672,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AnalysisResult"];
                 };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_analysis_api_v1_analyses__analysis_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                analysis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not Found */
             404: {
@@ -1739,7 +1872,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
