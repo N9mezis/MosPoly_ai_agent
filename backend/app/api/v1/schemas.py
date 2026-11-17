@@ -180,6 +180,8 @@ class AnalysisStatusOut(ApiModel):
     status_label: str
     stage: str = Field("", description="Текущий этап на русском, для показа пользователю")
     progress: float = Field(0.0, ge=0, le=1)
+    chunks_done: int = 0
+    chunks_total: int = 0
     error_code: str | None = None
     error_message: str = ""
     created_at: datetime
@@ -205,6 +207,8 @@ class AnalysisListItem(ApiModel):
     created_by_name: str = ""
     created_at: datetime
     finished_at: datetime | None = None
+    is_partial: bool = False
+    has_regulation_updates: bool = False
 
 
 class DocumentBlock(ApiModel):
@@ -233,6 +237,10 @@ class RegulationRef(ApiModel):
     effective_from: date | None = None
     effective_to: date | None = None
     url: str | None = None
+    version_id: uuid.UUID | None = None
+    full_text: str | None = None
+    update_status: Literal["unchanged", "changed", "not_in_active", "unknown"] = "unknown"
+    active_edition_date: date | None = None
 
 
 class FindingOut(ApiModel):
@@ -258,6 +266,18 @@ class TechnicalIssue(ApiModel):
     message: str
 
 
+class AnalysisSnapshotOut(ApiModel):
+    """Public metadata of the stored run, not a replay request."""
+
+    profile_id: uuid.UUID | None = None
+    regulation_version_ids: list[uuid.UUID] = Field(default_factory=list)
+    llm_provider: str = ""
+    llm_model: str = ""
+    embedding_model: str = ""
+    reranker: str = ""
+    prompt_hashes: dict[str, str] = Field(default_factory=dict)
+
+
 class AnalysisResult(ApiModel):
     id: uuid.UUID
     status: AnalysisStatus
@@ -271,6 +291,7 @@ class AnalysisResult(ApiModel):
     findings: list[FindingOut] = Field(description="Отсортированы: критические первыми")
     technical_issues: list[TechnicalIssue] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
+    snapshot: AnalysisSnapshotOut | None = None
 
 
 class ReportFormat(str, Enum):

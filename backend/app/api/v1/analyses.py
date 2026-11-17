@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis import results
 from app.analysis.queue import enqueue_analysis
-from app.analysis.service import create_analysis
+from app.analysis.service import ACTIVE_STATUSES, cancel_active_analysis, create_analysis
 from app.audit.service import log_event
+from app.core.config import get_settings
 from app.core.db import get_session
 from app.core.models import AnalysisStatus
 from app.core.security import CurrentUser, get_current_user
@@ -55,9 +56,10 @@ async def start_analysis(
         idempotency_key=idempotency_key,
     )
     await session.commit()
-    if created:
+    if created or analysis.status is AnalysisStatus.QUEUED:
+        # ARQ uses a fixed job ID, so retries can repair a failed enqueue safely.
         await enqueue_analysis(analysis.id)
-    else:
+    if not created:
         response.status_code = status.HTTP_200_OK
     return AnalysisCreated(analysis_id=analysis.id, status=analysis.status)
 
@@ -108,6 +110,21 @@ async def get_analysis_result(
     return await results.load_analysis_result(session, analysis_id, user)
 
 
+@router.post(
+    "/{analysis_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Отменить активную проверку без удаления сохранённого отчёта",
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def cancel_analysis(
+    analysis_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = Depends(get_current_user),
+) -> None:
+    analysis = await results.get_analysis_for_user(session, analysis_id, user, for_update=True)
+    await cancel_active_analysis(session, analysis, user, get_settings())
+
+
 @router.delete(
     "/{analysis_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -119,19 +136,16 @@ async def delete_analysis(
     session: AsyncSession = Depends(get_session),
     user: CurrentUser = Depends(get_current_user),
 ) -> None:
-    analysis = await results.get_analysis_for_user(session, analysis_id, user)
-    if analysis.status in (
-        AnalysisStatus.QUEUED,
-        AnalysisStatus.EXTRACTING,
-        AnalysisStatus.ANALYZING,
-    ):
-        analysis.status = AnalysisStatus.CANCELLED
-        analysis.stage = "Отменена"
-        action = "analysis.cancel"
-    else:
-        await session.delete(analysis)
-        action = "analysis.delete"
+    analysis = await results.get_analysis_for_user(session, analysis_id, user, for_update=True)
+    if analysis.status in ACTIVE_STATUSES:
+        await cancel_active_analysis(session, analysis, user, get_settings())
+        return
+    await session.delete(analysis)
     await log_event(
-        session, actor=user, action=action, entity_type="analysis", entity_id=str(analysis_id)
+        session,
+        actor=user,
+        action="analysis.delete",
+        entity_type="analysis",
+        entity_id=str(analysis_id),
     )
     await session.commit()

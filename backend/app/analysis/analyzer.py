@@ -100,6 +100,8 @@ class ContractAnalyzer:
         done = 0
         lock = asyncio.Lock()
         retrievals: dict[str, list[RetrievedRegulation]] = {}
+        if progress is not None:
+            await progress(0, len(chunks))
 
         async def run(chunk: ContractChunk) -> list[ChunkCheckResult]:
             nonlocal done
@@ -110,13 +112,21 @@ class ContractAnalyzer:
                 finally:
                     set_current_chunk(None)
                     del token
-            if progress is not None:
-                async with lock:
-                    done += 1
-                    await progress(done, len(chunks))
+                if progress is not None:
+                    async with lock:
+                        done += 1
+                        await progress(done, len(chunks))
             return results + required_by_chunk.get(chunk.chunk_id, [])
 
-        per_chunk = await asyncio.gather(*(run(chunk) for chunk in chunks))
+        tasks = [asyncio.create_task(run(chunk)) for chunk in chunks]
+        try:
+            per_chunk = await asyncio.gather(*tasks)
+        except BaseException:
+            # gather() alone leaves sibling requests running on a progress/cancellation error.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         results = technical + [item for chunk_results in per_chunk for item in chunk_results]
         results.extend(required_by_chunk.get("document", []))
         results = _deduplicate_results(results)
