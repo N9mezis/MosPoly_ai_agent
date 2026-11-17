@@ -6,6 +6,8 @@
 
 Интерфейс поддерживает загрузку, просмотр статуса и истории проверок, отчёт с подсветкой и выгрузку в PDF и DOCX. План — [docs/PLAN.md](docs/PLAN.md), контракты — [docs/CONTRACTS.md](docs/CONTRACTS.md), устройство поиска — [docs/RAG.md](docs/RAG.md).
 
+Перенос оформления ViWork, взаимодействие с API и следующие задачи интерфейса описаны в [docs/FRONTEND_V2.md](docs/FRONTEND_V2.md).
+
 ## Быстрый старт
 
 Нужен [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS) или Docker Engine + Compose (Linux).

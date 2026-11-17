@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, type components } from "./api/client";
 import { ErrorMessage } from "./ErrorMessage";
+import { Busy, FilePicker, fileExtension } from "./ui";
 
 type Schemas = components["schemas"];
 const statusLabels: Record<Schemas["RegulationVersionStatus"], string> = {
@@ -13,6 +14,8 @@ const dateFormat = new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeZo
 export function Regulations() {
   const cache = useQueryClient();
   const [versionId, setVersionId] = useState<string>();
+  const [file, setFile] = useState<File>();
+  const [validation, setValidation] = useState("");
   const sources = useQuery({
     queryKey: ["regulations"],
     queryFn: () => api<Schemas["RegulationSourceOut"][]>("/regulations"),
@@ -39,32 +42,64 @@ export function Regulations() {
     onSuccess: () => cache.invalidateQueries({ queryKey: ["regulations"] }),
   });
 
+  function choose(next?: File) {
+    setValidation("");
+    upload.reset();
+    if (next && (fileExtension(next.name) !== "json" || !next.size || next.size > 5 * 1024 * 1024)) {
+      setFile(undefined);
+      setValidation("Выберите непустой JSON-файл размером до 5 МБ.");
+    } else {
+      setFile(next);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = event.currentTarget;
-    const file = new FormData(form).get("file");
-    if (file instanceof File && file.size) {
+    if (file && !upload.isPending) {
       try {
         await upload.mutateAsync(file);
-        form.reset();
+        setFile(undefined);
       } catch {
         // Ошибка отображается из состояния запроса.
       }
     }
   }
 
-  return <section className="panel">
+  const versions = sources.data?.flatMap(source => source.versions ?? []) ?? [];
+  const active = versions.filter(version => version.status === "active");
+  return <>
     <h1>Нормативная база</h1>
-    <form className="admin-form" onSubmit={submit}>
-      <label>Новая версия источника<input name="file" type="file" accept=".json,application/json" required /></label>
-      <button disabled={upload.isPending}>Загрузить JSON</button>
-      {upload.isSuccess && <p role="status">Версия принята на индексацию.</p>}
-      <ErrorMessage error={upload.error} />
-    </form>
+    <p className="lead">Активные редакции участвуют в проверке договоров. Архивную редакцию можно восстановить.</p>
+    {sources.data && <div className="metrics three" aria-label="Состояние нормативной базы">
+      <div className="metric"><strong>{active.length}</strong><span>Активных редакций</span></div>
+      <div className="metric"><strong>{active.reduce((sum, version) => sum + (version.chunks_count ?? 0), 0)}</strong><span>Фрагментов в проверке</span></div>
+      <div className="metric"><strong>{versions.filter(version => version.status === "archived").length}</strong><span>Редакций в архиве</span></div>
+    </div>}
+    <section className="panel">
+      <h2>Добавить новую редакцию</h2>
+      <div className="workspace">
+        <form onSubmit={submit}>
+          <FilePicker file={file} onChange={choose} accept=".json,application/json"
+            hint="JSON в кодировке UTF-8 · до 5 МБ" disabled={upload.isPending} />
+          <div className="actions"><button className="primary" disabled={upload.isPending || !file}>Загрузить JSON</button>
+            {upload.isPending && <Busy>Отправляем редакцию…</Busy>}
+          </div>
+          {validation && <p role="alert" className="error">{validation}</p>}
+          {upload.isSuccess && <p role="status" className="status-note">Версия принята на индексацию.</p>}
+          <ErrorMessage error={upload.error} />
+        </form>
+        <aside className="requirements">
+          <h3>Что должно быть в файле</h3>
+          <ul><li>Идентификатор и название источника</li><li>Дата редакции</li><li>Непустой список нормативных фрагментов</li></ul>
+          <p>После индексации активируйте редакцию в списке ниже.</p>
+        </aside>
+      </div>
+    </section>
     <ErrorMessage error={sources.error ?? action.error} />
-    {sources.isPending && <p role="status">Загрузка нормативной базы…</p>}
-    {sources.data?.length === 0 && <p>Источников пока нет.</p>}
-    {sources.data?.map(source => <section className="regulation-source" key={source.id}>
+    {sources.isPending && <Busy>Загружаем нормативную базу…</Busy>}
+    {action.isPending && <Busy>Обновляем статус редакции…</Busy>}
+    {sources.data?.length === 0 && <p className="panel">Источников пока нет.</p>}
+    {sources.data?.map(source => <section className="panel regulation-source" key={source.id}>
       <h2>{source.title}</h2>
       <div className="table-scroll">
         <table className="history-table">
@@ -77,7 +112,9 @@ export function Regulations() {
               <td>{version.label || version.id}
                 {version.edition_date && <><br /><span className="muted">Редакция {dateFormat.format(new Date(version.edition_date))}</span></>}
               </td>
-              <td>{statusLabels[version.status]}
+              <td>{version.status === "indexing" || version.status === "draft"
+                ? <Busy>{statusLabels[version.status]}</Busy>
+                : <span className={`badge ${version.status === "active" || version.status === "ready" ? "success" : version.status === "failed" ? "danger" : ""}`}>{statusLabels[version.status]}</span>}
                 {version.error_message && <p className="error">{version.error_message}</p>}
               </td>
               <td>{version.chunks_count ?? 0}</td>
@@ -99,7 +136,7 @@ export function Regulations() {
       {source.versions?.some(version => version.id === versionId) && <section className="regulation-chunks">
         <h3>Фрагменты версии</h3>
         <ErrorMessage error={chunks.error} />
-        {chunks.isPending && <p role="status">Загрузка фрагментов…</p>}
+        {chunks.isPending && <Busy>Загружаем фрагменты…</Busy>}
         {chunks.data?.length === 0 && <p>Фрагментов нет.</p>}
         {chunks.data?.map(chunk => <details key={chunk.id}>
           <summary>{chunk.title || chunk.chunk_key}{chunk.part && ` · ч. ${chunk.part}`}</summary>
@@ -107,5 +144,5 @@ export function Regulations() {
         </details>)}
       </section>}
     </section>)}
-  </section>;
+  </>;
 }

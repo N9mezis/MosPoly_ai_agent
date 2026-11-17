@@ -1,16 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, downloadReport, json, login, logout, type components } from "./api/client";
 import { ErrorMessage } from "./ErrorMessage";
 import { History } from "./History";
 import { Regulations } from "./Regulations";
 import { Users } from "./Users";
+import { Busy, FilePicker, Icon, fileExtension } from "./ui";
+import logo from "./assets/viwork-logo.png";
 import "./styles.css";
 
 type Schemas = components["schemas"];
 type Finding = Schemas["FindingOut"];
 const terminal = ["completed", "failed", "cancelled"];
+const categories = [
+  { id: "critical", title: "Критические" },
+  { id: "recommended", title: "Рекомендательные" },
+  { id: "info", title: "Информационные" },
+] as const;
 
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   const navigate = useNavigate();
@@ -24,25 +31,26 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
     mutation.mutate({ email: String(values.get("email")), password: String(values.get("password")) });
   }
   return <section className="panel narrow">
-    <h1>Вход</h1>
+    <p className="eyebrow">Личный кабинет</p>
+    <h1>Вход в ViWork</h1>
+    <p className="muted">Войдите, чтобы проверить договор и открыть историю проверок.</p>
     <form onSubmit={submit}>
       <label>Электронная почта<input name="email" type="email" autoComplete="username" required /></label>
       <label>Пароль<input name="password" type="password" autoComplete="current-password" required /></label>
       <button disabled={mutation.isPending}>Войти</button>
+      {mutation.isPending && <Busy>Входим в систему…</Busy>}
       {mutation.error && <p role="alert" className="error">{mutation.error.message}</p>}
     </form>
   </section>;
 }
 
-function NewAnalysis() {
+function NewAnalysis({ typeId }: { typeId?: string }) {
   const navigate = useNavigate();
   const types = useQuery({ queryKey: ["document-types"], queryFn: () => api<Schemas["DocumentTypeOut"][]>("/document-types") });
-  const [selected, setSelected] = useState("");
   const [file, setFile] = useState<File>();
-  const [dragging, setDragging] = useState(false);
   const [validation, setValidation] = useState("");
-  const input = useRef<HTMLInputElement>(null);
-  const type = types.data?.find(item => item.id === selected) ?? types.data?.find(item => item.is_enabled);
+  const type = types.data?.find(item => item.id === typeId && item.is_enabled);
+  const formats = type?.allowed_extensions.map(value => value.replace(/^\./, "").toLowerCase()) ?? [];
   const mutation = useMutation({
     mutationFn: async ({ document, documentType }: { document: File; documentType: string }) => {
       const data = new FormData();
@@ -55,52 +63,82 @@ function NewAnalysis() {
     onSuccess: result => navigate(`/analyses/${result.analysis_id}`),
   });
   function choose(document?: File) {
-    setFile(document);
     setValidation("");
     mutation.reset();
+    if (document && !formats.includes(fileExtension(document.name))) {
+      setFile(undefined);
+      setValidation(`Выберите файл в формате ${formats.map(value => value.toUpperCase()).join(" или ")}.`);
+    } else if (document && (!document.size || document.size > 10 * 1024 * 1024)) {
+      setFile(undefined);
+      setValidation("Файл должен содержать данные и не превышать 10 МБ.");
+    } else {
+      setFile(document);
+    }
   }
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!file || !type) return;
-    const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-    if (!type.allowed_extensions.some(value => extension === `.${value.replace(/^\./, "")}`)) {
-      setValidation("Выберите файл допустимого формата.");
-    } else if (!file.size || file.size > 10 * 1024 * 1024) {
-      setValidation("Размер файла должен быть больше нуля и не превышать 10 МБ.");
-    } else {
-      setValidation("");
-      mutation.mutate({ document: file, documentType: type.id });
-    }
+    if (!file || !type || mutation.isPending) return;
+    mutation.mutate({ document: file, documentType: type.id });
   }
-  return <section className="panel narrow">
-    <h1>Новая проверка</h1>
-    <p>Загрузите трудовой договор для проверки по ТК РФ.</p>
-    <form onSubmit={submit}>
-      <label>Тип документа
-        <select value={type?.id ?? ""} onChange={e => setSelected(e.target.value)} disabled={mutation.isPending}>
-          {!type && <option value="">Выберите тип</option>}
-          {types.data?.map(item => <option key={item.id} value={item.id} disabled={!item.is_enabled}>{item.title}</option>)}
-        </select>
-      </label>
-      <div className={dragging ? "drop active" : "drop"}
-        onDragOver={event => { event.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={event => {
-          event.preventDefault();
-          setDragging(false);
-          if (!mutation.isPending) choose(event.dataTransfer.files[0]);
-        }}>
-        <p>{file?.name ?? "Перетащите договор сюда"}</p>
-        <p className="muted">DOCX или PDF, до 10 МБ</p>
-        <input hidden ref={input} type="file" accept=".docx,.pdf"
-          onChange={event => { choose(event.target.files?.[0]); event.target.value = ""; }} />
-        <button type="button" className="secondary" onClick={() => input.current?.click()} disabled={mutation.isPending}>Выбрать файл</button>
+  if (!type) return <>
+    <h1>Какой договор нужно проверить?</h1>
+    <p className="lead">Выберите тип документа. Для каждого типа используется свой набор норм и правил проверки.</p>
+    {typeId && types.data && <p role="alert" className="error">Этот тип документа пока недоступен.</p>}
+    <section className="panel" aria-labelledby="types-heading">
+      <h2 id="types-heading">Типы договоров</h2>
+      {types.isPending && <Busy>Загружаем типы документов…</Busy>}
+      <ErrorMessage error={types.error} />
+      {types.data?.length === 0 && <p className="muted">Типы документов пока не настроены.</p>}
+      <div className="catalog">
+        {types.data?.map(item => <article className="profile-card" key={item.id}>
+          <span className={item.is_enabled ? "badge success" : "badge"}>{item.is_enabled ? "Доступно" : "В разработке"}</span>
+          <h3>{item.title}</h3>
+          <p>{item.description}</p>
+          <p className="muted">{item.scope}</p>
+          {item.is_enabled
+            ? <Link className="profile-action" to={`/check/${encodeURIComponent(item.id)}`}
+                aria-label={`Перейти к проверке: ${item.title}`}>Перейти к проверке</Link>
+            : <button disabled>Пока недоступно</button>}
+        </article>)}
       </div>
-      <button disabled={!file || !type || mutation.isPending}>{mutation.isPending ? "Загрузка…" : "Запустить проверку"}</button>
-      {validation && <p role="alert" className="error">{validation}</p>}
-      <ErrorMessage error={types.error ?? mutation.error} />
-    </form>
-  </section>;
+    </section>
+  </>;
+  return <>
+    {!mutation.isPending && <Link className="back" to="/">← Все типы договоров</Link>}
+    <h1>{type.title}</h1>
+    <p className="lead">{type.description}</p>
+    <div className="workspace">
+      <section className="panel">
+        <h2>Загрузите договор</h2>
+        <form onSubmit={submit}>
+          <FilePicker file={file} onChange={choose} disabled={mutation.isPending}
+            accept={formats.map(value => `.${value}`).join(",")}
+            hint={`${formats.map(value => value.toUpperCase()).join(" или ")} с текстовым слоем · до 10 МБ`} />
+          <div className="actions">
+            <button className="primary" disabled={!file || mutation.isPending}>Запустить проверку</button>
+            {mutation.isPending && <Busy>Загружаем файл и создаём проверку…</Busy>}
+            {!file && !validation && <span className="muted">Выберите файл, чтобы начать</span>}
+          </div>
+          {validation && <p role="alert" className="error">{validation}</p>}
+          <ErrorMessage error={mutation.error} />
+        </form>
+      </section>
+      <aside className="panel guide">
+        <h2>Как проходит проверка</h2>
+        <ol>
+          <li><strong>Извлекаем текст</strong><span>Разбираем документ на пункты.</span></li>
+          <li><strong>Сверяем условия</strong><span>Подбираем нормы для проверки.</span></li>
+          <li><strong>Готовим отчёт</strong><span>Показываем замечания и цитаты.</span></li>
+        </ol>
+        <p className="muted">{type.scope}</p>
+      </aside>
+    </div>
+  </>;
+}
+
+function CheckRoute() {
+  const { typeId } = useParams();
+  return <NewAnalysis key={typeId} typeId={typeId} />;
 }
 
 function AnalysisStatus() {
@@ -115,9 +153,11 @@ function AnalysisStatus() {
     <h1>Статус проверки</h1>
     <ErrorMessage error={result.error} />
     {result.error && <button onClick={() => void result.refetch()}>Повторить запрос</button>}
-    {result.isPending && <p role="status">Загрузка статуса…</p>}
+    {result.isPending && <Busy>Загружаем статус…</Busy>}
     {result.data && <>
-      <p role="status">{result.data.status_label}{result.data.stage ? ` · ${result.data.stage}` : ""}</p>
+      {terminal.includes(result.data.status)
+        ? <p role="status">{result.data.status_label}</p>
+        : <Busy>{[result.data.status_label, result.data.stage].filter(Boolean).join(" · ")}</Busy>}
       <progress aria-label="Прогресс проверки" max={1} value={result.data.progress ?? 0} />
       {result.data.error_message && <p role="alert" className="error">{result.data.error_message}</p>}
     </>}
@@ -155,11 +195,11 @@ function Report() {
   const query = useQuery({
     queryKey: ["report", id], queryFn: () => api<Schemas["AnalysisResult"]>(`/analyses/${id}/result`),
   });
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState<(typeof categories)[number]["id"] | "all">("all");
   const download = useMutation({ mutationFn: (format: "pdf" | "docx") => downloadReport(id!, format) });
   const result = query.data;
   if (!result) return <section className="panel"><h1>Отчёт</h1><ErrorMessage error={query.error} />
-    {query.isPending && <p role="status">Загрузка отчёта…</p>}
+    {query.isPending && <Busy>Загружаем отчёт…</Busy>}
     {query.error instanceof ApiError && query.error.status === 409 && <Link to={`/analyses/${id}`}>К статусу проверки</Link>}
   </section>;
   const findings = result.findings.filter(item => filter === "all" || item.category === filter);
@@ -167,22 +207,29 @@ function Report() {
     <div className="report-head">
       <div><h1>Отчёт о проверке</h1><p className="filename">{result.filename}</p></div>
       <div className="actions">
-        <button disabled={download.isPending} onClick={() => download.mutate("pdf")}>Скачать PDF</button>
-        <button disabled={download.isPending} onClick={() => download.mutate("docx")}>Скачать DOCX</button>
+        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("pdf")}>Скачать PDF</button>
+        <button className="secondary" disabled={download.isPending} onClick={() => download.mutate("docx")}>Скачать DOCX</button>
       </div>
     </div>
     <ErrorMessage error={download.error} />
+    {download.isPending && <Busy>Готовим файл отчёта…</Busy>}
     <p className="notice">{result.disclaimer}</p>
     {result.is_partial && <p className="notice">Проверка частичная. Не все пункты удалось проверить.</p>}
-    <p>Критические: {result.summary.critical ?? 0} · Рекомендательные: {result.summary.recommended ?? 0} · Информационные: {result.summary.info ?? 0}</p>
+    <div className="metrics" aria-label="Сводка по проверке">
+      {categories.map(category => <div className={`metric ${category.id}`} key={category.id}>
+        <strong>{result.summary[category.id] ?? 0}</strong><span>{category.title}</span>
+      </div>)}
+      <div className="metric"><strong>{result.summary.technical_errors ?? 0}</strong><span>Технические сбои</span></div>
+    </div>
     <div className="columns">
       <DocumentText result={result} findings={findings} />
       <div>
         <h2>Замечания</h2>
-        <label>Категория<select value={filter} onChange={e => setFilter(e.target.value)}>
-          <option value="all">Все категории</option><option value="critical">Критические</option>
-          <option value="recommended">Рекомендательные</option><option value="info">Информационные</option>
-        </select></label>
+        <div className="filters" role="group" aria-label="Категория замечаний">
+          <button aria-pressed={filter === "all"} onClick={() => setFilter("all")}>Все категории</button>
+          {categories.map(category => <button key={category.id} aria-pressed={filter === category.id}
+            onClick={() => setFilter(category.id)}>{category.title}</button>)}
+        </div>
         {!findings.length && <p>Нет замечаний в выбранной категории.</p>}
         {findings.map(finding => <article id={`finding-${finding.id}`} className={`finding ${finding.category}`} key={finding.id}>
           <strong>{finding.category_label} · {finding.chunk_key}</strong>
@@ -217,10 +264,11 @@ export function App() {
     onSuccess: () => { cache.clear(); navigate("/login", { replace: true }); },
   });
   const loginScreen = <Login onLogin={async () => { await cache.invalidateQueries({ queryKey: ["session"] }); }} />;
-  const protectedView = user.isPending ? <p role="status">Проверяем сессию…</p>
+  const protectedView = user.isPending ? <Busy>Проверяем сессию…</Busy>
     : user.error ? <ErrorMessage error={user.error} />
     : <Routes>
         <Route path="/" element={<NewAnalysis />} />
+        <Route path="/check/:typeId" element={<CheckRoute />} />
         <Route path="/history" element={<History />} />
         {canManageUsers && user.data && <Route path="/users" element={<Users current={user.data} />} />}
         {canManageRegulations && <Route path="/regulations" element={<Regulations />} />}
@@ -228,19 +276,39 @@ export function App() {
         <Route path="/analyses/:id/report" element={<Report />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>;
+  const showMenu = Boolean(user.data && pathname !== "/login");
   return <>
-    <header><Link to="/">Проверка договоров</Link>
-      {user.data && pathname !== "/login" && <div className="actions"><span>{user.data.full_name}</span>
-        <Link to="/history">История проверок</Link>
-        {canManageUsers && <Link to="/users">Пользователи</Link>}
-        {canManageRegulations && <Link to="/regulations">Нормативная база</Link>}
-        <button className="secondary" disabled={leaving.isPending} onClick={() => leaving.mutate()}>Выйти</button></div>}
+    <a className="skip-link" href="#main-content">Перейти к содержимому</a>
+    <header className="portal-header">
+      <div className="topbar">
+        <div className="brand">
+          <Link to="/" aria-label="ViWork — главная"><img src={logo} alt="ViWork" width={126} height={28} /></Link>
+          <span>Проверка договоров</span>
+        </div>
+        {showMenu && <div className="actions">
+          <span className="muted account-name">{user.data?.full_name}</span>
+          <button className="secondary" disabled={leaving.isPending} onClick={() => leaving.mutate()}>Выйти</button>
+        </div>}
+      </div>
     </header>
-    <main><ErrorMessage error={leaving.error} />
-      <Routes>
-        <Route path="/login" element={loginScreen} />
-        <Route path="/*" element={protectedView} />
-      </Routes>
-    </main>
+    <div className={showMenu ? "portal-layout with-menu" : "portal-layout"}>
+      {showMenu && <aside className="sidebar">
+        <p className="eyebrow">Документы</p>
+        <nav aria-label="Основная навигация">
+          <NavLink to="/" end className="nav-item" data-section-active={/^\/(analyses|check)\//.test(pathname) || undefined}>
+            <Icon name="documents" />Проверка договоров
+          </NavLink>
+          <NavLink to="/history" className="nav-item"><Icon name="history" />История проверок</NavLink>
+          {canManageRegulations && <NavLink to="/regulations" className="nav-item"><Icon name="library" />Нормативная база</NavLink>}
+          {canManageUsers && <NavLink to="/users" className="nav-item"><Icon name="users" />Пользователи</NavLink>}
+        </nav>
+      </aside>}
+      <main id="main-content" tabIndex={-1}><ErrorMessage error={leaving.error} />
+        <Routes>
+          <Route path="/login" element={loginScreen} />
+          <Route path="/*" element={protectedView} />
+        </Routes>
+      </main>
+    </div>
   </>;
 }
