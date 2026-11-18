@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, json, type components } from "./api/client";
 import { ErrorMessage } from "./ErrorMessage";
+import { Busy } from "./ui";
 
 type Schemas = components["schemas"];
 type Role = Schemas["UserRole"];
@@ -60,7 +61,7 @@ export function Users({ current }: { current: Schemas["MeOut"] }) {
   return <section className="panel">
     <h1>Пользователи</h1>
     <ErrorMessage error={users.error ?? organizations.error ?? update.error} />
-    {users.isPending && <p role="status">Загрузка пользователей…</p>}
+    {users.isPending && <Busy>Загружаем пользователей…</Busy>}
     {users.data && <>
       <div className="table-scroll">
         <table className="history-table">

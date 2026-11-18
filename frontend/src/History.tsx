@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { api, ApiError, type components } from "./api/client";
+import { Busy } from "./ui";
 
 type Schemas = components["schemas"];
 const statuses: Record<Schemas["AnalysisStatus"], string> = {
@@ -49,7 +50,7 @@ export function History() {
         {Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
     </label>
-    {query.isPending && <p role="status">Загрузка истории…</p>}
+    {query.isPending && <Busy>Загружаем историю…</Busy>}
     {query.error && <p role="alert" className="error">{query.error.message}</p>}
     {data && <>
       {data.items.length ? <div className="table-scroll">
