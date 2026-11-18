@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import uuid
 
 import pytest
@@ -121,6 +122,7 @@ def _upload_and_start(client, monkeypatch, path, key=None) -> uuid.UUID:
         again = client.post("/api/v1/analyses", json={"document_id": document_id}, headers=headers)
         assert again.status_code == 200
         assert again.json()["analysis_id"] == str(analysis_id)
+        assert queued == [analysis_id, analysis_id]  # ARQ deduplicates the retry by job ID.
     return analysis_id
 
 
@@ -188,6 +190,108 @@ def test_full_pipeline_problematic_contract(client, monkeypatch):
     assert document.storage_key is None and document.purged_at is not None  # НФ-04
     assert analysis.snapshot["regulation_versions"]
     assert calls, "журнал вызовов LLM пуст"
+    assert result["snapshot"]["prompt_hashes"]["chunk_check"]
+    assert result["snapshot"]["llm_model"] == "spy-model"
+    cited = next(f for f in result["findings"] if f["regulation"]["version_id"])
+    assert cited["regulation"]["full_text"]
+    assert cited["regulation"]["update_status"] == "unchanged"
+    cancel = client.post(f"/api/v1/analyses/{analysis_id}/cancel")
+    assert (
+        cancel.status_code == 409 and cancel.json()["error"]["code"] == "analysis_not_cancellable"
+    )
+    assert client.get(f"/api/v1/analyses/{analysis_id}/result").status_code == 200
+
+
+def test_cancel_queued_keeps_record_and_purges_file(client, monkeypatch):
+    analysis_id = _upload_and_start(client, monkeypatch, PROBLEMATIC)
+
+    async def document_for_run():
+        async with _sessionmaker()() as session:
+            row = await session.get(analysis_service.Analysis, analysis_id)
+            return await session.get(Document, row.document_id)
+
+    before = asyncio.run(document_for_run())
+    old_path = get_settings().upload_tmp_dir / before.storage_key
+    assert old_path.is_file()
+    url = f"/api/v1/analyses/{analysis_id}"
+    assert client.post(url + "/cancel").status_code == 204
+    assert client.post(url + "/cancel").status_code == 204
+    _run(analysis_id, SpyLLM())
+    response = client.get(url).json()
+    assert response["status"] == "cancelled" and response["finished_at"]
+    assert not old_path.exists()
+    assert asyncio.run(document_for_run()).storage_key is None
+    assert client.get(url + "/result").status_code == 409
+
+
+def test_cancel_during_analysis_does_not_publish(client, monkeypatch):
+    analysis_id = _upload_and_start(client, monkeypatch, PROBLEMATIC)
+    url = f"/api/v1/analyses/{analysis_id}"
+
+    class CancellingLLM(SpyLLM):
+        async def check_required_terms(self, chunks, regulations):
+            assert client.post(url + "/cancel").status_code == 204
+            return []
+
+    _run(analysis_id, CancellingLLM())
+    assert client.get(url).json()["status"] == "cancelled"
+    assert client.get(url + "/result").status_code == 409
+
+
+def test_report_and_history_flag_changed_citation_without_replacing_quote(client, monkeypatch):
+    analysis_id = _upload_and_start(client, monkeypatch, PROBLEMATIC)
+    _run(analysis_id, SpyLLM())
+    url = f"/api/v1/analyses/{analysis_id}/result"
+    before = client.get(url).json()
+    finding = next(f for f in before["findings"] if f["regulation"]["article"] == "91")
+    original = uuid.UUID(finding["regulation"]["version_id"])
+
+    async def activate_test_version():
+        sessionmaker = _sessionmaker()
+        async with sessionmaker() as session:
+            current = await session.get(RegulationVersion, original)
+            body = json.dumps(
+                {
+                    "source_id": current.source_id,
+                    "source_title": "Test version",
+                    "edition_date": "2099-01-01",
+                    "chunks": [
+                        {
+                            "article": "91",
+                            "part": finding["regulation"]["part"],
+                            "text": f"Synthetic revision {uuid.uuid4()}",
+                        }
+                    ],
+                }
+            ).encode()
+            version = await knowledge.create_version(session, body, uploaded_by=None)
+            await session.commit()
+            vid = version.id
+        await knowledge.index_version(sessionmaker, vid, AsyncHashingEmbedder())
+        async with sessionmaker() as session:
+            await knowledge.activate_version(session, vid)
+            await session.commit()
+
+    async def restore_original():
+        async with _sessionmaker()() as session:
+            await knowledge.activate_version(session, original)
+            await session.commit()
+
+    try:
+        asyncio.run(activate_test_version())
+        after = client.get(url).json()
+        matched = next(f for f in after["findings"] if f["id"] == finding["id"])
+        ref = matched["regulation"]
+        assert ref["update_status"] == "changed"
+        assert ref["active_edition_date"] == "2099-01-01"
+        assert ref["version_id"] == str(original)
+        assert ref["full_text"] == finding["regulation"]["full_text"]
+        history = client.get("/api/v1/analyses").json()
+        assert next(item for item in history["items"] if item["id"] == str(analysis_id))[
+            "has_regulation_updates"
+        ]
+    finally:
+        asyncio.run(restore_original())
 
 
 def test_llm_outage_gives_partial_result(client, monkeypatch):

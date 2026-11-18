@@ -47,7 +47,8 @@
 | `GET /analyses` | A | ✅ | история: `?status=&page=&page_size=` → `Page[AnalysisListItem]` |
 | `GET /analyses/{id}` | A | ✅ | статус: `AnalysisStatusOut` (опрос каждые 1–2 с) |
 | `GET /analyses/{id}/result` | A | ✅ | `AnalysisResult`; 409, если проверка ещё не завершена |
-| `DELETE /analyses/{id}` | A | ✅ | отмена или удаление |
+| `POST /analyses/{id}/cancel` | A | ✅ | безопасная отмена: 204, если отменена; 409, если уже завершена, без удаления отчёта |
+| `DELETE /analyses/{id}` | A | ✅ | прежний API отмены или удаления; кнопка отмены его не использует |
 | `GET /analyses/{id}/report?format=pdf\|docx` | B | 501 | файл отчёта |
 | `GET /regulations` | A | ✅ | источники с версиями |
 | `POST /regulations?activate=` | A | ✅ | multipart `file` (JSON) → версия `draft`, индексация в воркере → `ready` |
@@ -63,14 +64,16 @@
 
 ### Сценарий фронта (Ф-11)
 
-1. `POST /documents` → `document_id`. При ошибке 422 показать `error.message` (текст уже на русском).
-2. `POST /analyses` с `Idempotency-Key: <uuid, сгенерированный на клиенте>` → `analysis_id`.
-3. Опрашивать `GET /analyses/{id}`, пока статус не станет `completed`/`failed`; показывать `stage` и `progress`.
+1. `POST /documents` → `document_id`. Для ошибок использовать `error.code` и подсказку, `error.message` — запасной текст.
+2. `POST /analyses` с уникальным `Idempotency-Key` → `analysis_id`. При сетевом повторе используйте тот же документ и ключ; в очереди задача различается по ID.
+3. Опрашивать `GET /analyses/{id}`, пока статус не станет `completed`, `failed` или `cancelled`; показывать `stage` и `progress`. `chunks_done` и `chunks_total` позволяют приблизительно оценить оставшееся время после появления прогресса.
 4. `GET /analyses/{id}/result` → отчёт:
    - `blocks` — текст договора по абзацам; `findings[].highlights` — подсветка `[start, end)` внутри `block_id`;
    - `findings` уже отсортированы: критические первыми (Ф-10); `category_label` — готовая подпись;
    - `technical_issues` — технические сбои, показываются **отдельно** от юридических замечаний;
    - `is_partial=true` — плашка «проверены не все пункты»;
+   - `regulation.full_text` — сохранённый фрагмент из `version_id`, а не текст новой редакции. `update_status`: `unchanged`, `changed`, `not_in_active` или `unknown`, если сравнение невозможно. История возвращает `has_regulation_updates` и `is_partial`;
+   - `snapshot` — сохранённые идентификаторы, модели и отпечатки промптов, без текста промптов и секретов. Повторного запуска этот API не делает;
    - `disclaimer` показывается всегда (Ф-18).
 5. `GET /analyses/{id}/report?format=pdf|docx` — скачивание.
 

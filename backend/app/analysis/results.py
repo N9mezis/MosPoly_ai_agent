@@ -13,6 +13,7 @@ from app.api.v1.schemas import (
     CATEGORY_LABELS,
     AnalysisListItem,
     AnalysisResult,
+    AnalysisSnapshotOut,
     AnalysisStatusOut,
     AnalysisSummary,
     DocumentBlock,
@@ -28,23 +29,22 @@ from app.core.models import (
     AnalysisStatus,
     Document,
     Finding,
-    FindingCitation,
     FindingStatus,
-    RegulationChunk,
-    RegulationSource,
-    RegulationVersion,
     User,
     UserRole,
 )
 from app.core.security import CurrentUser, can_read_analysis
 
+from .citations import citation_refs
 from .postprocess import CATEGORY_ORDER
 
 
 async def get_analysis_for_user(
-    session: AsyncSession, analysis_id: uuid.UUID, user: CurrentUser
+    session: AsyncSession, analysis_id: uuid.UUID, user: CurrentUser, *, for_update: bool = False
 ) -> Analysis:
-    analysis = await session.get(Analysis, analysis_id)
+    analysis = await session.get(
+        Analysis, analysis_id, with_for_update=True if for_update else None
+    )
     if analysis is None or not can_read_analysis(
         user, organization_id=analysis.organization_id, created_by=analysis.created_by
     ):
@@ -59,6 +59,8 @@ def status_out(analysis: Analysis) -> AnalysisStatusOut:
         status_label=ANALYSIS_STATUS_LABELS[analysis.status],
         stage=analysis.stage,
         progress=analysis.progress,
+        chunks_done=analysis.chunks_done,
+        chunks_total=analysis.chunks_total,
         error_code=analysis.error_code,
         error_message=analysis.error_message,
         created_at=analysis.created_at,
@@ -101,16 +103,7 @@ async def load_analysis_result(
     findings = list(
         await session.scalars(select(Finding).where(Finding.analysis_id == analysis_id))
     )
-    citations = {
-        finding_id: (chunk, version, source)
-        for finding_id, chunk, version, source in await session.execute(
-            select(FindingCitation.finding_id, RegulationChunk, RegulationVersion, RegulationSource)
-            .join(RegulationChunk, RegulationChunk.id == FindingCitation.regulation_chunk_id)
-            .join(RegulationVersion, RegulationVersion.id == RegulationChunk.version_id)
-            .join(RegulationSource, RegulationSource.id == RegulationVersion.source_id)
-            .where(FindingCitation.finding_id.in_([f.id for f in findings] or [uuid.uuid4()]))
-        )
-    }
+    citations = await citation_refs(session, [analysis.id])
 
     published: list[FindingOut] = []
     technical: list[TechnicalIssue] = []
@@ -122,16 +115,7 @@ async def load_analysis_result(
             continue
         cited = citations.get(finding.id)
         if cited:
-            chunk, version, source = cited
-            regulation = RegulationRef(
-                source_title=source.title,
-                article=chunk.article,
-                part=chunk.part,
-                edition_date=version.edition_date,
-                effective_from=version.effective_from,
-                effective_to=version.effective_to,
-                url=source.source_url,
-            )
+            regulation = cited[1]
         else:
             regulation = RegulationRef(
                 source_title="Трудовой кодекс Российской Федерации",
@@ -181,6 +165,21 @@ async def load_analysis_result(
         blocks=[DocumentBlock(**block) for block in analysis.document_blocks],
         findings=published,
         technical_issues=technical,
+        snapshot=AnalysisSnapshotOut(
+            profile_id=analysis.profile_id,
+            regulation_version_ids=analysis.snapshot.get("regulation_versions", []),
+            llm_provider=analysis.llm_provider,
+            llm_model=analysis.llm_model,
+            embedding_model=analysis.embedding_model,
+            reranker=analysis.reranker,
+            prompt_hashes={
+                key: value
+                for key, value in analysis.snapshot.get("prompts", {}).items()
+                if key in {"chunk_check", "required_terms"}
+            },
+        )
+        if analysis.snapshot
+        else None,
     )
 
 
@@ -208,9 +207,20 @@ async def list_history(
     if status is not None:
         query = query.where(Analysis.status == status)
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    rows = await session.execute(
-        query.order_by(Analysis.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    rows = (
+        await session.execute(
+            query.order_by(Analysis.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    citations = await citation_refs(
+        session,
+        [analysis.id for analysis, _, _ in rows if analysis.status is AnalysisStatus.COMPLETED],
     )
+    updated_ids = {
+        aid for aid, ref in citations.values() if ref.update_status in ("changed", "not_in_active")
+    }
     items = [
         AnalysisListItem(
             id=analysis.id,
@@ -222,6 +232,8 @@ async def list_history(
             created_by_name=full_name or "",
             created_at=analysis.created_at,
             finished_at=analysis.finished_at,
+            is_partial=analysis.is_partial,
+            has_regulation_updates=analysis.id in updated_ids,
         )
         for analysis, filename, full_name in rows
     ]

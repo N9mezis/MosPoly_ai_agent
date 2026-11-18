@@ -36,7 +36,7 @@ async function refreshSession() {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string, public details?: unknown) {
     super(message);
   }
 }
@@ -45,7 +45,10 @@ async function request(path: string, options: RequestInit = {}, retry = true) {
   const previousToken = accessToken;
   const headers = new Headers(options.headers);
   if (previousToken) headers.set("Authorization", `Bearer ${previousToken}`);
-  const response = await fetch(`/api/v1${path}`, { ...options, headers });
+  const response = await fetch(`/api/v1${path}`, { ...options, headers }).catch(error => {
+    if (options.signal?.aborted) throw error;
+    throw new ApiError(0, "Не удалось связаться с сервисом.", "network_error");
+  });
   if (response.status === 401 && retry) {
     if (accessToken && accessToken !== previousToken) return request(path, options, false);
     refreshing ??= refreshSession().finally(() => { refreshing = undefined; });
@@ -53,13 +56,19 @@ async function request(path: string, options: RequestInit = {}, retry = true) {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, body?.error?.message || `Ошибка запроса (${response.status})`);
+    const problem = body?.error;
+    throw new ApiError(response.status, problem?.message || `Ошибка запроса (${response.status})`,
+      problem?.code, problem?.details);
   }
   return response;
 }
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   return (await request(path, options)).json();
+}
+
+export async function send(path: string, options?: RequestInit) {
+  await request(path, options);
 }
 
 export function json(body: unknown): RequestInit {

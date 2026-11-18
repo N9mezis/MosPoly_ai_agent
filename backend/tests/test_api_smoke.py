@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
 from uuid import uuid4
 
 import pytest
+from pypdf import PdfWriter
 
 from app.core.config import get_settings
 from tests.paths import REPO_ROOT
@@ -51,6 +53,25 @@ def test_upload_rejected(client, name, content, code):
     error = response.json()["error"]
     assert error["code"] == code
     assert error["message"]
+
+
+def test_upload_too_large(client):
+    size_limit = get_settings().max_upload_mb * 1024 * 1024
+    response = client.post(
+        "/api/v1/documents", files={"file": ("large.pdf", b"x" * (size_limit + 1))}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "file_too_large"
+
+
+def test_upload_pdf_without_text_layer(client):
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    buffer = BytesIO()
+    writer.write(buffer)
+    response = client.post("/api/v1/documents", files={"file": ("scan.pdf", buffer.getvalue())})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "no_text_layer"
 
 
 def test_invalid_credentials_error_format(client):

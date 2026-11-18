@@ -38,7 +38,7 @@ from app.core.models import (
     RegulationVersionStatus,
     Retrieval,
 )
-from app.core.security import CurrentUser
+from app.core.security import CurrentUser, can_read_analysis
 from app.documents.parser import parse_document
 from app.domain.chunker import CLAUSE_PATTERN
 from app.domain.classifier import is_supported_employment_contract
@@ -63,6 +63,8 @@ from .postprocess import (
 
 logger = logging.getLogger(__name__)
 
+ACTIVE_STATUSES = (AnalysisStatus.QUEUED, AnalysisStatus.EXTRACTING, AnalysisStatus.ANALYZING)
+
 STAGE_LABELS = {
     "queued": "В очереди",
     "extracting": "Извлечение текста",
@@ -77,6 +79,10 @@ class AnalysisFailed(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class AnalysisStopped(Exception):
+    """The job is no longer active; do not publish or overwrite its final state."""
 
 
 @dataclass(slots=True)
@@ -108,6 +114,12 @@ async def create_analysis(
             )
         )
         if existing is not None:
+            if not can_read_analysis(
+                user, organization_id=existing.organization_id, created_by=existing.created_by
+            ):
+                raise NotFoundError("Документ не найден")
+            if existing.document_id != document_id or existing.document_type_id != document_type_id:
+                raise ConflictError("Этот запрос уже использован для другого документа.")
             return existing, False
 
     document = await session.get(Document, document_id)
@@ -174,10 +186,20 @@ async def create_analysis(
 # ============================================================ выполнение (воркер)
 
 
-async def _set(sessionmaker, analysis_id: uuid.UUID, **values) -> None:
+async def _set(sessionmaker, analysis_id: uuid.UUID, **values) -> bool:
     async with sessionmaker() as session:
-        await session.execute(update(Analysis).where(Analysis.id == analysis_id).values(**values))
+        result = await session.execute(
+            update(Analysis)
+            .where(
+                Analysis.id == analysis_id,
+                Analysis.status.in_((AnalysisStatus.EXTRACTING, AnalysisStatus.ANALYZING)),
+            )
+            .values(**values)
+            .returning(Analysis.id)
+        )
+        updated = result.scalar_one_or_none() is not None
         await session.commit()
+        return updated
 
 
 def _purge_file(path: Path) -> None:
@@ -187,6 +209,39 @@ def _purge_file(path: Path) -> None:
         logger.warning("Не удалось удалить временный файл %s", path.name)
 
 
+async def cancel_active_analysis(
+    session: AsyncSession,
+    analysis: Analysis,
+    user: CurrentUser,
+    settings: Settings,
+) -> None:
+    """The caller holds the analysis row lock. Cancelling never deletes a report."""
+    if analysis.status is AnalysisStatus.CANCELLED:
+        return
+    if analysis.status not in ACTIVE_STATUSES:
+        raise ConflictError("Проверка уже завершилась.", code="analysis_not_cancellable")
+    queued_path = None
+    if analysis.status is AnalysisStatus.QUEUED:
+        document = await session.get(Document, analysis.document_id)
+        if document and document.storage_key:
+            queued_path = settings.upload_tmp_dir / document.storage_key
+            document.storage_key = None
+            document.purged_at = datetime.now(UTC)
+    analysis.status = AnalysisStatus.CANCELLED
+    analysis.stage = "Отменена"
+    analysis.finished_at = datetime.now(UTC)
+    await log_event(
+        session,
+        actor=user,
+        action="analysis.cancel",
+        entity_type="analysis",
+        entity_id=str(analysis.id),
+    )
+    await session.commit()
+    if queued_path:
+        _purge_file(queued_path)
+
+
 def _prompt_hash(*parts: str) -> str:
     return hashlib.sha256("\n---\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
@@ -194,7 +249,7 @@ def _prompt_hash(*parts: str) -> str:
 async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
     sessionmaker = deps.sessionmaker
     async with sessionmaker() as session:
-        analysis = await session.get(Analysis, analysis_id)
+        analysis = await session.get(Analysis, analysis_id, with_for_update=True)
         if analysis is None:
             logger.warning("Проверка %s не найдена", analysis_id)
             return
@@ -296,7 +351,7 @@ async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
                 ),
             },
         }
-        await _set(
+        if not await _set(
             sessionmaker,
             analysis_id,
             status=AnalysisStatus.ANALYZING,
@@ -308,11 +363,12 @@ async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
             embedding_model=deps.embedder.model_name,
             reranker=deps.reranker.name,
             snapshot=snapshot,
-        )
+        ):
+            return
 
         # 4. Проверка.
         async def progress(done: int, total: int) -> None:
-            await _set(
+            if not await _set(
                 sessionmaker,
                 analysis_id,
                 chunks_total=total,
@@ -320,7 +376,8 @@ async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
                 progress=round(0.1 + 0.85 * done / max(total, 1), 3),
                 stage=f"{STAGE_LABELS['analyzing']}: {done} из {total}",
                 heartbeat_at=datetime.now(UTC),
-            )
+            ):
+                raise AnalysisStopped
 
         analyzer = ContractAnalyzer(
             retriever,
@@ -336,8 +393,11 @@ async def run_analysis(deps: PipelineDeps, analysis_id: uuid.UUID) -> None:
             stop_call_log(token)
 
         # 5. Сохранение.
-        await _set(sessionmaker, analysis_id, stage=STAGE_LABELS["saving"], progress=0.97)
+        if not await _set(sessionmaker, analysis_id, stage=STAGE_LABELS["saving"], progress=0.97):
+            return
         await _persist(sessionmaker, analysis_id, report, retriever, call_log.records)
+    except AnalysisStopped:
+        return
     except AnalysisFailed as failure:
         await _set(
             sessionmaker,
@@ -382,8 +442,8 @@ async def _persist(
     chunks_by_key = {chunk.chunk_id: chunk for chunk in report.chunks}
 
     async with sessionmaker() as session:
-        analysis = await session.get(Analysis, analysis_id)
-        if analysis is None or analysis.status is AnalysisStatus.CANCELLED:
+        analysis = await session.get(Analysis, analysis_id, with_for_update=True)
+        if analysis is None or analysis.status is not AnalysisStatus.ANALYZING:
             return
         analysis.document_blocks = [
             {
@@ -537,10 +597,12 @@ async def recover_stale(
     async with sessionmaker() as session:
         stale = list(
             await session.scalars(
-                select(Analysis).where(
+                select(Analysis)
+                .where(
                     Analysis.status.in_([AnalysisStatus.EXTRACTING, AnalysisStatus.ANALYZING]),
                     Analysis.heartbeat_at < threshold,
                 )
+                .with_for_update(skip_locked=True)
             )
         )
         for analysis in stale:
