@@ -82,6 +82,110 @@ button.secondary, button.drop, .filters button { border-color: var(--line); back
 button.secondary:hover:not(:disabled), .filters button:hover { background: var(--page); }
 button.primary { min-height: 46px; }
 .back { display: inline-block; margin-bottom: 16px; }
+.contract-select { display: grid; min-width: 0; gap: 8px; }
+.contract-select-field { position: relative; }
+.contract-select-trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 14px 8px 10px;
+  border-color: var(--control-line);
+  border-radius: var(--middle-radius);
+  background: var(--card);
+  color: var(--heading);
+  text-align: left;
+}
+.contract-select-trigger:hover:not(:disabled),
+.contract-select-trigger[aria-expanded="true"] {
+  border-color: var(--brand);
+  background: var(--card);
+}
+.contract-select-trigger[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px rgb(4 120 87 / 12%);
+}
+.contract-select-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: var(--small-radius);
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+.contract-select-chevron, .contract-select-check {
+  display: block;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+}
+.contract-select-chevron {
+  width: 8px;
+  height: 8px;
+  margin: -4px 3px 0;
+  color: var(--muted);
+  transform: rotate(45deg);
+}
+.contract-select-trigger[aria-expanded="true"] .contract-select-chevron {
+  margin-top: 4px;
+  transform: rotate(225deg);
+}
+.contract-select-list {
+  position: absolute;
+  z-index: 1;
+  inset: calc(100% + 6px) 0 auto;
+  display: grid;
+  gap: 4px;
+  max-height: min(280px, 44vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--middle-radius);
+  background: var(--card);
+  box-shadow: 0 10px 24px rgb(27 31 59 / 12%);
+  list-style: none;
+}
+.contract-select-list[data-above="true"] { inset: auto 0 calc(100% + 6px); }
+.contract-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: var(--small-radius);
+  cursor: pointer;
+}
+.contract-select-option span:first-child { min-width: 0; }
+.contract-select-option[aria-selected="true"] {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.contract-select-option:not([aria-disabled="true"]):hover { box-shadow: inset 0 0 0 1px var(--brand); }
+.contract-select-option[data-active="true"]:not([aria-selected="true"]) {
+  background: var(--page);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+.contract-select-option[aria-disabled="true"] { color: var(--muted); cursor: not-allowed; flex-wrap: wrap; }
+.contract-select-status {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--page);
+  font-size: 12px;
+  font-weight: 500;
+}
+.contract-select-check {
+  flex: none;
+  width: 7px;
+  height: 13px;
+  margin: -3px 4px 0 0;
+  transform: rotate(45deg);
+}
 .type-description { margin: 0; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 280px); align-items: start; gap: 24px; }
 .guide h2 { font-size: 15px; margin-bottom: 20px; }

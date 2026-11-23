@@ -4,6 +4,7 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, usePa
 import { api, ApiError, downloadReport, json, login, logout, type components } from "./api/client";
 import { ErrorMessage } from "./ErrorMessage";
 import { AnalysisStatus } from "./AnalysisStatus";
+import { ContractTypeSelect } from "./ContractTypeSelect";
 import { RegulationEvidence, RunEvidence } from "./ReportEvidence";
 import { History } from "./History";
 import { Regulations } from "./Regulations";
@@ -118,15 +119,8 @@ function NewAnalysis({ initialTypeId = "" }: { initialTypeId?: string }) {
     <div className="workspace">
       <section className="panel">
         <form onSubmit={submit}>
-          <label>Тип договора
-            <select value={type?.id ?? ""} onChange={event => selectType(event.target.value)}
-              disabled={!hasAvailableTypes || mutation.isPending}>
-              <option value="" disabled>Выберите тип договора</option>
-              {types.data?.map(item => <option key={item.id} value={item.id} disabled={!item.is_enabled}>
-                {item.title}{!item.is_enabled && " — в разработке"}
-              </option>)}
-            </select>
-          </label>
+          <ContractTypeSelect options={types.data} value={type?.id}
+            onChange={selectType} disabled={!hasAvailableTypes || mutation.isPending} />
           {types.isPending && <Busy>Загружаем типы договоров…</Busy>}
           <ErrorMessage error={types.error} />
           {types.isError && <div className="actions">
