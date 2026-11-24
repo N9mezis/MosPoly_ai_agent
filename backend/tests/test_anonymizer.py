@@ -1,4 +1,4 @@
-from app.domain.anonymizer import anonymize_text
+from app.domain.anonymizer import anonymize_text, contains_personal_data
 
 
 def test_anonymizes_common_personal_data() -> None:
@@ -17,15 +17,33 @@ def test_anonymizes_common_personal_data() -> None:
     assert "ivan@example.com" not in result
 
 
+def test_anonymizes_labeled_documents_and_birth_date() -> None:
+    text = (
+        "Паспорт: серия 4501, номер 123456. "
+        "Дата рождения: 01.02.2000. "
+        "Телефон: 89991234567."
+    )
+
+    result = anonymize_text(text)
+
+    assert "4501" not in result
+    assert "123456" not in result
+    assert "01.02.2000" not in result
+    assert "[PASSPORT]" in result
+    assert "[BIRTH_DATE]" in result
+    assert "[PHONE]" in result
+
+
 def test_anonymizes_names_in_any_case() -> None:
     text = (
         "в лице директора Громова Олега Петровича, и Федорова Максима Олеговича; "
-        "подписал Иванов И.И., согласовала Мария Сергеевна Петрова."
+        "подписал Иванов И.И., согласовала Мария Сергеевна Петрова. "
+        "Работник: ИВАНОВ ИВАН ИВАНОВИЧ."
     )
     result = anonymize_text(text)
-    for name in ("Громова", "Федорова", "Иванов", "Петрова"):
+    for name in ("Громова", "Федорова", "Иванов", "Петрова", "ИВАНОВ"):
         assert name not in result
-    assert result.count("[PERSON]") == 4
+    assert result.count("[PERSON]") == 5
 
 
 def test_hides_residence_address_but_keeps_workplace() -> None:
@@ -38,6 +56,11 @@ def test_hides_residence_address_but_keeps_workplace() -> None:
     assert "Ленина" not in result
     assert "[ADDRESS]" in result
     assert "[PASSPORT]" in result
+
+
+def test_contains_personal_data_detects_unmasked_values() -> None:
+    assert contains_personal_data("Иванов Иван Иванович, 89991234567")
+    assert not contains_personal_data("[PERSON], [PHONE]")
 
 
 def test_legal_text_is_not_mangled() -> None:
