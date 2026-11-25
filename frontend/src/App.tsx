@@ -4,6 +4,7 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, usePa
 import { api, ApiError, downloadReport, json, login, logout, type components } from "./api/client";
 import { ErrorMessage } from "./ErrorMessage";
 import { AnalysisStatus } from "./AnalysisStatus";
+import { ContractTypeSelect } from "./ContractTypeSelect";
 import { RegulationEvidence, RunEvidence } from "./ReportEvidence";
 import { History } from "./History";
 import { Regulations } from "./Regulations";
@@ -14,6 +15,7 @@ import "./styles.css";
 
 type Schemas = components["schemas"];
 type Finding = Schemas["FindingOut"];
+const productName = "ViAgent";
 const categories = [
   { id: "critical", title: "Критические" },
   { id: "recommended", title: "Рекомендательные" },
@@ -42,7 +44,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   }
   return <section className="panel narrow">
     <p className="eyebrow">Личный кабинет</p>
-    <h1>Вход в ViWork</h1>
+    <h1>Вход в {productName}</h1>
     <p className="muted">Войдите, чтобы проверить договор и открыть историю проверок.</p>
     <form onSubmit={submit}>
       <label>Электронная почта<input name="email" type="email" autoComplete="username" required /></label>
@@ -54,13 +56,15 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   </section>;
 }
 
-function NewAnalysis({ typeId }: { typeId?: string }) {
+function NewAnalysis({ initialTypeId = "" }: { initialTypeId?: string }) {
   const navigate = useNavigate();
   const types = useQuery({ queryKey: ["document-types"], queryFn: () => api<Schemas["DocumentTypeOut"][]>("/document-types") });
+  const [selectedTypeId, setSelectedTypeId] = useState(initialTypeId);
   const [file, setFile] = useState<File>();
   const [validation, setValidation] = useState("");
   const [attempt, setAttempt] = useState<{ key: string; documentId: string | null }>();
-  const type = types.data?.find(item => item.id === typeId && item.is_enabled);
+  const type = types.data?.find(item => item.id === selectedTypeId && item.is_enabled);
+  const hasAvailableTypes = types.data?.some(item => item.is_enabled);
   const formats = type?.allowed_extensions.map(value => value.replace(/^\./, "").toLowerCase()) ?? [];
   const mutation = useMutation({
     mutationFn: async ({ document, documentType, current }: {
@@ -96,6 +100,10 @@ function NewAnalysis({ typeId }: { typeId?: string }) {
       setFile(document);
     }
   }
+  function selectType(id: string) {
+    setSelectedTypeId(id);
+    choose();
+  }
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!file || !type || mutation.isPending) return;
@@ -105,44 +113,36 @@ function NewAnalysis({ typeId }: { typeId?: string }) {
     setAttempt(current);
     mutation.mutate({ document: file, documentType: type.id, current });
   }
-  if (!type) return <>
-    <h1>Какой договор нужно проверить?</h1>
-    <p className="lead">Выберите тип документа. Для каждого типа используется свой набор норм и правил проверки.</p>
-    {typeId && types.data && <p role="alert" className="error">Этот тип документа пока недоступен.</p>}
-    <section className="panel" aria-labelledby="types-heading">
-      <h2 id="types-heading">Типы договоров</h2>
-      {types.isPending && <Busy>Загружаем типы документов…</Busy>}
-      <ErrorMessage error={types.error} />
-      {types.data?.length === 0 && <p className="muted">Типы документов пока не настроены.</p>}
-      <div className="catalog">
-        {types.data?.map(item => <article className="profile-card" key={item.id}>
-          <span className={item.is_enabled ? "badge success" : "badge"}>{item.is_enabled ? "Доступно" : "В разработке"}</span>
-          <h3>{item.title}</h3>
-          <p>{item.description}</p>
-          <p className="muted">{item.scope}</p>
-          {item.is_enabled
-            ? <Link className="profile-action" to={`/check/${encodeURIComponent(item.id)}`}
-                aria-label={`Перейти к проверке: ${item.title}`}>Перейти к проверке</Link>
-            : <button disabled>Пока недоступно</button>}
-        </article>)}
-      </div>
-    </section>
-  </>;
   return <>
-    {!mutation.isPending && <Link className="back" to="/">← Все типы договоров</Link>}
-    <h1>{type.title}</h1>
-    <p className="lead">{type.description}</p>
+    <h1>Проверка договора</h1>
+    <p className="lead">Выберите тип документа и загрузите файл для проверки.</p>
     <div className="workspace">
       <section className="panel">
-        <h2>Загрузите договор</h2>
         <form onSubmit={submit}>
-          <FilePicker file={file} onChange={choose} disabled={mutation.isPending}
-            accept={formats.map(value => `.${value}`).join(",")}
-            hint={`${formats.map(value => value.toUpperCase()).join(" или ")} с текстовым слоем · до 10 МБ`} />
+          <ContractTypeSelect options={types.data} value={type?.id}
+            onChange={selectType} disabled={!hasAvailableTypes || mutation.isPending} />
+          {types.isPending && <Busy>Загружаем типы договоров…</Busy>}
+          <ErrorMessage error={types.error} />
+          {types.isError && <div className="actions">
+            <button type="button" className="secondary" disabled={types.isFetching}
+              onClick={() => void types.refetch()}>Повторить загрузку списка</button>
+          </div>}
+          {types.data && !hasAvailableTypes && <p className="muted">Сейчас нет доступных типов для проверки.</p>}
+          {types.data && hasAvailableTypes && selectedTypeId && !type &&
+            <p role="alert" className="error">Этот тип пока недоступен. Выберите другой из списка.</p>}
+          {type && <p className="type-description muted">{type.description}</p>}
+          <section aria-labelledby="upload-heading">
+            <h2 id="upload-heading">Загрузите договор</h2>
+            <FilePicker file={file} onChange={choose} disabled={!type || mutation.isPending}
+              accept={formats.map(value => `.${value}`).join(",")}
+              hint={type
+                ? `${formats.map(value => value.toUpperCase()).join(" или ")} с текстовым слоем · до 10 МБ`
+                : "Сначала выберите тип договора"} />
+          </section>
           <div className="actions">
-            <button className="primary" disabled={!file || mutation.isPending}>Запустить проверку</button>
+            <button className="primary" disabled={!type || !file || mutation.isPending}>Запустить проверку</button>
             {mutation.isPending && <Busy>Загружаем файл и создаём проверку…</Busy>}
-            {!file && !validation && <span className="muted">Выберите файл, чтобы начать</span>}
+            {type && !file && !validation && <span className="muted">Выберите файл, чтобы начать</span>}
           </div>
           {validation && <p role="alert" className="error">{validation}</p>}
           <ErrorMessage error={mutation.error} />
@@ -150,12 +150,12 @@ function NewAnalysis({ typeId }: { typeId?: string }) {
       </section>
       <aside className="panel guide">
         <h2>Как проходит проверка</h2>
-        <ol>
+        <ol role="list">
           <li><strong>Извлекаем текст</strong><span>Разбираем документ на пункты.</span></li>
           <li><strong>Сверяем условия</strong><span>Подбираем нормы для проверки.</span></li>
           <li><strong>Готовим отчёт</strong><span>Показываем замечания и цитаты.</span></li>
         </ol>
-        <p className="muted">{type.scope}</p>
+        {type && <p className="muted">Область проверки: {type.scope}</p>}
       </aside>
     </div>
   </>;
@@ -163,7 +163,7 @@ function NewAnalysis({ typeId }: { typeId?: string }) {
 
 function CheckRoute() {
   const { typeId } = useParams();
-  return <NewAnalysis key={typeId} typeId={typeId} />;
+  return <NewAnalysis key={typeId} initialTypeId={typeId} />;
 }
 
 function DocumentText({ result, findings }: { result: Schemas["AnalysisResult"]; findings: Finding[] }) {
@@ -316,7 +316,7 @@ export function App() {
       <div className="topbar">
         <div className="brand">
           <Link to="/" aria-label="ViWork — главная"><img src={logo} alt="ViWork" width={126} height={28} /></Link>
-          <span>Проверка договоров</span>
+          <span>{productName}</span>
         </div>
         {showMenu && <div className="actions">
           <span className="muted account-name">{user.data?.full_name}</span>

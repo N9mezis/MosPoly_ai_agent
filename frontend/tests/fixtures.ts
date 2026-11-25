@@ -10,7 +10,7 @@ const versionId = "10000000-0000-4000-8000-000000000005";
 const created = "2026-11-17T10:00:00Z";
 const quote = "Пример условия";
 const filename = "test-contract.docx";
-const documentType = {
+export const documentType = {
   id: "employment-contract", title: "Трудовой договор", description: "Тестовый профиль.",
   scope: "Выборочные нормы", allowed_extensions: ["docx", "pdf"], is_enabled: true,
 };
@@ -45,6 +45,7 @@ export const report: Schemas["AnalysisResult"] = {
 };
 
 type State = {
+  documentTypes: Schemas["DocumentTypeOut"][];
   signedIn: boolean;
   status: Schemas["AnalysisStatus"];
   uploads: number;
@@ -64,6 +65,9 @@ const failure = (route: Route, status: number, code: string) =>
 
 export async function stubApi(page: Page, options: Partial<State> = {}) {
   const state: State = {
+    documentTypes: [documentType, {
+      ...documentType, id: "nda", title: "Соглашение о конфиденциальности (NDA)", is_enabled: false,
+    }],
     signedIn: true, status: "queued", uploads: 0, statusRequests: 0, cancellations: 0, keys: [],
     ...options,
   };
@@ -84,7 +88,7 @@ export async function stubApi(page: Page, options: Partial<State> = {}) {
       organization: { id: orgId, name: "Тестовая организация", created_at: created },
       created_at: created,
     });
-    if (path === "/document-types") return success(route, [documentType]);
+    if (path === "/document-types") return success(route, state.documentTypes);
     if (path === "/documents" && method === "POST") {
       state.uploads++;
       if (state.uploadError) return failure(route, 422, state.uploadError);

@@ -1,11 +1,71 @@
 import { expect, test, type Page } from "@playwright/test";
-import { file, id, stubApi } from "./fixtures";
+import { documentType, file, id, stubApi } from "./fixtures";
 
 async function openUpload(page: Page) {
   await page.goto("/");
-  await page.getByRole("link", { name: "Перейти к проверке: Трудовой договор" }).click();
+  await page.getByRole("combobox", { name: "Тип договора" }).click();
+  await page.getByRole("option", { name: "Трудовой договор", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Загрузите договор" })).toBeVisible();
 }
+
+test("на одном экране выбор типа открывает загрузку, а недоступные типы отключены", async ({ page }) => {
+  await stubApi(page);
+  await page.goto("/");
+  const picker = page.getByRole("button", { name: "Выбрать файл" });
+  const types = page.getByRole("combobox", { name: "Тип договора" });
+  await expect(types).toBeEnabled();
+  await expect(picker).toBeDisabled();
+  await types.click();
+  const disabledType = page.getByRole("option", { name: /NDA/ });
+  await expect(disabledType).toBeDisabled();
+  await expect(disabledType).toContainText("В разработке");
+  await page.getByRole("option", { name: "Трудовой договор", exact: true }).click();
+  await expect(picker).toBeEnabled();
+  await expect(types).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("Область проверки: Выборочные нормы")).toBeVisible();
+  await expect(page).toHaveURL("/");
+});
+
+test("смена типа очищает файл, а старая ссылка открывается с выбранным типом", async ({ page }) => {
+  await stubApi(page, { documentTypes: [documentType, {
+    ...documentType, id: "test-other", title: "Другой тестовый профиль", allowed_extensions: ["pdf"],
+  }] });
+  await page.goto("/check/employment-contract");
+  const types = page.getByRole("combobox", { name: "Тип договора" });
+  await expect(types).toContainText("Трудовой договор");
+  const input = page.locator('input[type="file"]');
+  await input.setInputFiles(file());
+  const start = page.getByRole("button", { name: "Запустить проверку" });
+  await expect(start).toBeEnabled();
+  await types.press("Space");
+  await types.press("ArrowDown");
+  await types.press("Escape");
+  await expect(types).toContainText("Трудовой договор");
+  await expect(start).toBeEnabled();
+  await types.press("Enter");
+  await types.press("ArrowDown");
+  await types.press("Enter");
+  await expect(types).toContainText("Другой тестовый профиль");
+  await expect(page.getByText("test-contract.docx")).toHaveCount(0);
+  await expect(start).toBeDisabled();
+  await expect(input).toHaveAttribute("accept", ".pdf");
+});
+
+test("меню на узком экране закрывается по клику вне списка", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page);
+  await page.goto("/");
+  const types = page.getByRole("combobox", { name: "Тип договора" });
+  await types.click();
+  const list = page.getByRole("listbox", { name: "Тип договора" });
+  await expect(list).toBeVisible();
+  const box = await list.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.getByRole("heading", { name: "Проверка договора", exact: true }).click();
+  await expect(list).toBeHidden();
+  await expect(types).toContainText("Выберите тип договора");
+});
 
 test("вход после перехода по ссылке на сохранённую проверку", async ({ page }) => {
   await stubApi(page, { signedIn: false, status: "completed" });
